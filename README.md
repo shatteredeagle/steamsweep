@@ -93,10 +93,10 @@ steamsweep clean                                # same list, then asks y/N
 steamsweep clean --yes --if-closed              # unattended: skip quietly if Steam is running
 steamsweep clean --yes --close-steam            # close Steam first, then clean
 steamsweep clean --include leftover,cache,prefix --yes   # opt in to more types
-steamsweep clean --recordings --older-than 30d --yes     # also delete game recordings and clips older than 30 days
+steamsweep clean --include leftover,recording --older-than 30d --yes   # also delete recordings older than 30 days
 ```
 
-`--recordings` is shorthand for adding `recording` to `--include`: it deletes Steam's background recordings and saved clips (`userdata/*/gamerecordings`) together with their timeline files. Recordings are your own videos, so unattended runs should pair it with `--older-than` (`30d`, `2w`, `12h`), which keeps anything newer and only applies to recordings.
+The `recording` type is Steam's background recordings and saved clips (`userdata/*/gamerecordings`) with their timeline files. They are your own videos, so unattended runs should pair it with `--older-than` (`30d`, `2w`, `12h`), which keeps anything newer and only applies to recordings.
 
 `--include` takes `leftover`, `cache`, `prefix`, `recording`, `proton` and `partial`. Add `prefix` to also remove the Proton
 prefixes of uninstalled games, which can contain save files. Exit codes: 0 done or nothing to do, 1 an error (including Steam running without

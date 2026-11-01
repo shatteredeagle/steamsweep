@@ -88,8 +88,7 @@ func runClean(args []string) {
 	fs := flag.NewFlagSet("clean", flag.ExitOnError)
 	root := fs.String("steam-root", "", "Steam install directory (default: auto-detect)")
 	include := fs.String("include", "leftover", "comma-separated types to delete: leftover, cache, prefix, recording, proton, partial")
-	recordings := fs.Bool("recordings", false, "also delete Steam game recordings and saved clips (see --older-than)")
-	olderThan := fs.String("older-than", "", "with recordings: only those older than this, e.g. 30d, 2w, 12h")
+	olderThan := fs.String("older-than", "", "limit recordings to those older than this, e.g. 30d, 2w, 12h")
 	dry := fs.Bool("dry-run", false, "list what would be deleted, delete nothing")
 	yes := fs.Bool("yes", false, "do not ask for confirmation (needed for timers and scripts)")
 	closeSteam := fs.Bool("close-steam", false, "close Steam first if it is running")
@@ -100,9 +99,6 @@ func runClean(args []string) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "steamsweep:", err)
 		os.Exit(2)
-	}
-	if *recordings {
-		kinds = append(kinds, clean.KindRecording)
 	}
 	var age time.Duration
 	if *olderThan != "" {

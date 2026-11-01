@@ -387,6 +387,12 @@ func ParseKinds(csv string) ([]Kind, error) {
 			continue
 		}
 		k, ok := valid[f]
+		if !ok { // tolerate plurals: recordings, prefixes, caches
+			k, ok = valid[strings.TrimSuffix(f, "es")]
+			if !ok {
+				k, ok = valid[strings.TrimSuffix(f, "s")]
+			}
+		}
 		if !ok {
 			return nil, fmt.Errorf("unknown type %q (have recording, leftover, prefix, cache, proton, partial)", f)
 		}

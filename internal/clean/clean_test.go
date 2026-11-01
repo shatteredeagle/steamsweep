@@ -168,6 +168,10 @@ func TestSelectAndParseKinds(t *testing.T) {
 			t.Errorf("selected %s of kind %s", it.Name, it.Kind)
 		}
 	}
+	plural, err := ParseKinds("recordings, prefixes,caches,leftovers")
+	if err != nil || len(plural) != 4 || plural[0] != KindRecording || plural[1] != KindPrefix {
+		t.Errorf("plurals: %v %v", plural, err)
+	}
 	if _, err := ParseKinds("leftover,bogus"); err == nil {
 		t.Error("accepted an unknown type")
 	}

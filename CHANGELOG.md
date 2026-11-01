@@ -2,7 +2,7 @@
 
 ## 0.4.0
 
-- `steamsweep clean --recordings` also deletes Steam game recordings and saved clips, with their timeline files. `--older-than 30d` (or `2w`, `12h`) limits it to recordings older than that, so a timer can keep recent ones.
+- `steamsweep clean --older-than 30d` (or `2w`, `12h`) limits recordings to those older than that, so a timer can delete old recordings with `--include recording` and keep recent ones. It only applies to recordings.
 - The scanner now also looks in Steam's saved-clips folder, not only the background recording folder.
 
 ## 0.3.0
