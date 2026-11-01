@@ -23,7 +23,11 @@ func buildVersion() string {
 		return version
 	}
 	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
-		return strings.TrimPrefix(bi.Main.Version, "v")
+		v := strings.TrimPrefix(bi.Main.Version, "v")
+		if strings.ContainsAny(v, "-+") {
+			return "dev" // pseudo-version from an untagged or dirty checkout: never self-update those
+		}
+		return v
 	}
 	return "dev"
 }
