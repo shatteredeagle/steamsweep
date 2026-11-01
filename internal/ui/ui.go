@@ -441,6 +441,24 @@ func (m *model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.selected[e.key] = !allOn
 			}
 		}
+	case "m":
+		// Mark everything of the cursor row's type (for example every Proton prefix), skipping nothing:
+		// pressing m is an explicit choice, unlike "a". A second press unmarks them again.
+		if m.tab == tabClean && len(m.view) > 0 {
+			tag := m.view[m.cursor].tag
+			allOn := true
+			for _, e := range m.view {
+				if e.tag == tag && !m.selected[e.key] {
+					allOn = false
+					break
+				}
+			}
+			for _, e := range m.view {
+				if e.tag == tag {
+					m.selected[e.key] = !allOn
+				}
+			}
+		}
 	case "i":
 		for _, e := range m.view {
 			m.selected[e.key] = !m.selected[e.key]
@@ -780,7 +798,11 @@ func (m *model) viewList() string {
 	if m.tab == tabClean {
 		other = "games"
 	}
-	keys := [][2]string{{"↑↓", "move"}, {"space", "mark"}, {"a", "all"}, {"/", "filter"}, {"s", "sort"}, {"r", "reverse"}, {"tab", other}}
+	keys := [][2]string{{"↑↓", "move"}, {"space", "mark"}, {"a", "all"}}
+	if m.tab == tabClean {
+		keys = append(keys, [2]string{"m", "mark type"})
+	}
+	keys = append(keys, [][2]string{{"/", "filter"}, {"s", "sort"}, {"r", "reverse"}, {"tab", other}}...)
 	if m.tab == tabGames {
 		keys = append(keys, [2]string{"t", "tools"})
 	}
@@ -840,6 +862,21 @@ func (m *model) viewConfirm() string {
 	}
 	if len(entries) > 8 {
 		b.WriteString(sMuted.Render(fmt.Sprintf("  … and %d more\n", len(entries)-8)))
+	}
+	var prefixes, recordings int
+	for _, e := range entries {
+		switch e.tag {
+		case "prefix":
+			prefixes++
+		case "recording":
+			recordings++
+		}
+	}
+	if prefixes > 0 {
+		b.WriteString("\n" + sWarn.Render(fmt.Sprintf("⚠ %d Proton %s may hold save files: some games keep saves inside the prefix.", prefixes, map[bool]string{true: "prefix", false: "prefixes"}[prefixes == 1])) + "\n")
+	}
+	if recordings > 0 {
+		b.WriteString("\n" + sWarn.Render(fmt.Sprintf("⚠ %d of these are your game recordings.", recordings)) + "\n")
 	}
 	if hasGame {
 		pfx := sFaint.Render("○") + sMuted.Render(" keep Proton prefix (saves)")

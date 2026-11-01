@@ -1,6 +1,7 @@
 package clean
 
 import (
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"strings"
@@ -121,3 +122,31 @@ func TestRemove(t *testing.T) {
 
 // vdfPath escapes backslashes the way Steam writes Windows paths in .vdf files.
 func vdfPath(p string) string { return strings.ReplaceAll(p, `\`, `\\`) }
+
+func TestOrphanNamesFromAppInfo(t *testing.T) {
+	root, games := fixture(t)
+	// minimal v40 appinfo (inline keys) naming app 999
+	var kv []byte
+	kv = append(kv, 0x00)
+	kv = append(kv, []byte("appinfo\x00")...)
+	kv = append(kv, 0x00)
+	kv = append(kv, []byte("common\x00")...)
+	kv = append(kv, 0x01)
+	kv = append(kv, []byte("name\x00Lost Game\x00")...)
+	kv = append(kv, 0x08, 0x08, 0x08)
+	hdr := make([]byte, 4+4+8+20+4+20)
+	entry := append([]byte{0xE7, 0x03, 0, 0}, 0, 0, 0, 0) // appid 999
+	binary.LittleEndian.PutUint32(entry[4:], uint32(len(hdr)+len(kv)))
+	file := []byte{0x28, 0x44, 0x56, 0x07, 1, 0, 0, 0}
+	file = append(file, entry...)
+	file = append(file, hdr...)
+	file = append(file, kv...)
+	file = append(file, 0, 0, 0, 0)
+	os.MkdirAll(filepath.Join(root, "appcache"), 0o755)
+	os.WriteFile(filepath.Join(root, "appcache", "appinfo.vdf"), file, 0o644)
+
+	got := byName(Scan(root, []string{root}, games).Items)
+	if _, ok := got["Lost Game Proton prefix"]; !ok {
+		t.Errorf("orphan prefix not named from appinfo; have %v", keys(got))
+	}
+}

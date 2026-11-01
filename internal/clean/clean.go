@@ -84,10 +84,11 @@ func appName(names map[string]string, id string) string {
 	return "App " + id
 }
 
-// nonSteamID reports Non-Steam shortcut ids, which are 32-bit values with the high bit set.
+// nonSteamID reports ids that are not Steam games: Non-Steam shortcuts (32-bit values with the high
+// bit set), the placeholder 0, and anything non-numeric.
 func nonSteamID(id string) bool {
 	n, err := strconv.ParseUint(id, 10, 64)
-	return err != nil || n >= 1<<31
+	return err != nil || n == 0 || n >= 1<<31 // 0 is Steam's own placeholder, not a game
 }
 
 var serviceDirs = []string{"Proton", "SteamLinuxRuntime", "Steamworks Shared", "Steam Controller Configs"}
@@ -123,6 +124,27 @@ func Scan(root string, libs []string, games []steam.Game) Result {
 			return
 		}
 		res.Items = append(res.Items, it)
+	}
+
+	// Names of uninstalled games come from Steam's local app database.
+	unknown := map[string]bool{}
+	for _, lib := range libs {
+		sa := filepath.Join(lib, "steamapps")
+		for _, sub := range []string{"compatdata", "shadercache", filepath.Join("workshop", "content")} {
+			for _, d := range dirs(filepath.Join(sa, sub)) {
+				if !installed[d] {
+					unknown[d] = true
+				}
+			}
+		}
+	}
+	for _, id := range recordingAppIDs(root) {
+		if !installed[id] {
+			unknown[id] = true
+		}
+	}
+	for id, name := range steam.AppNames(root, unknown) {
+		names[id] = name
 	}
 
 	missing := steam.MissingLibraries(root)
@@ -217,6 +239,19 @@ func Scan(root string, libs []string, games []steam.Game) Result {
 	res.Items = append(res.Items, recordings(root, names)...)
 	sort.SliceStable(res.Items, func(i, j int) bool { return res.Items[i].Size > res.Items[j].Size })
 	return res
+}
+
+func recordingAppIDs(root string) []string {
+	var ids []string
+	bases, _ := filepath.Glob(filepath.Join(root, "userdata", "*", "gamerecordings", "video"))
+	for _, base := range bases {
+		for _, d := range dirs(base) {
+			if m := recDir.FindStringSubmatch(d); m != nil {
+				ids = append(ids, m[1])
+			}
+		}
+	}
+	return ids
 }
 
 var recDir = regexp.MustCompile(`^bg_(\d+)_(\d{8})_(\d{6})$`)

@@ -74,6 +74,7 @@ steamsweep --steam-root /path/to/Steam
 | `a` / `i` / `c` | Mark everything shown / invert / clear marks |
 | `/` | Filter by name (`esc` clears) |
 | `s` / `r` | Cycle sort / reverse it (Games: size, last played, last updated, name. Cleanup: size, type, name) |
+| `m` | Cleanup tab: mark every item of the row's type, such as all Proton prefixes (again to unmark) |
 | `tab` | Switch between the Games and Cleanup tabs |
 | `t` | Show Proton and runtime tools on the Games tab (hidden by default) |
 | `enter` | Review and confirm the uninstall |
@@ -103,7 +104,7 @@ same mark-and-confirm flow, so you can clear games and clutter in one pass. Mark
 | --- | --- | --- |
 | `recording` | Game recordings and their timeline files (`userdata/*/gamerecordings/video`) | no |
 | `leftover` | Game folders with no manifest, plus shader cache and Workshop data for uninstalled games | yes |
-| `prefix` | Proton prefixes of uninstalled games (can hold saves) | no |
+| `prefix` | Proton prefixes of uninstalled games (can hold saves); press `m` on one to mark them all | no |
 | `cache` | Web, store and artwork caches, logs, crash dumps, shader caches of installed games | yes |
 | `partial` | Incomplete downloads (`steamapps/downloading`, `temp`) | no |
 | `proton` | Custom Proton builds in `compatibilitytools.d` (a game may still use one) | no |
@@ -112,6 +113,8 @@ same mark-and-confirm flow, so you can clear games and clutter in one pass. Mark
 Proton builds are always marked by hand (they show in yellow). Non-Steam shortcut prefixes are never listed.
 If a library listed in `libraryfolders.vdf` is missing, for example an unmounted drive, leftover detection turns
 itself off with a warning, because that drive's games would otherwise look uninstalled.
+
+Uninstalled games are named from Steam's local app database (`appcache/appinfo.vdf`), so you see "Valheim Proton prefix" instead of an app id. Apps Steam no longer knows show as `App <id>`.
 
 Every path is checked to sit inside Steam's folders before anything is deleted.
 

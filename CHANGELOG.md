@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1
+
+- Leftovers, Proton prefixes and recordings of uninstalled games are now named (for example "Valheim Proton prefix") using Steam's local app database, instead of showing a bare app id.
+- Cleanup tab: `m` marks every item of the type under the cursor, so you can clear all Proton prefixes of uninstalled games in one go. The confirm screen warns that prefixes can hold save files.
+- Stopped listing Steam's placeholder `compatdata/0` as a leftover.
+
 ## 0.2.0
 
 - New Cleanup tab (press `tab`): recordings, leftovers from uninstalled games, Proton prefixes, caches, logs, incomplete downloads and old Proton builds, with the same mark-and-confirm flow. Marks carry across tabs, so you can clear games and clutter in one pass.

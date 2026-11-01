@@ -231,3 +231,32 @@ func TestUpdateBanner(t *testing.T) {
 		t.Error("failure not shown")
 	}
 }
+
+func TestMarkType(t *testing.T) {
+	m := testModel()
+	press(m, "tab")
+	m.Update(scannedMsg{clean.Result{Items: []clean.Item{
+		{Key: "p1", Name: "A prefix", Kind: clean.KindPrefix, Size: 3e9, Paths: []string{"/lib/a"}},
+		{Key: "p2", Name: "B prefix", Kind: clean.KindPrefix, Size: 2e9, Paths: []string{"/lib/b"}},
+		{Key: "c1", Name: "Cache", Kind: clean.KindCache, Size: 1e9, Safe: true, Paths: []string{"/lib/c"}},
+	}}})
+	if got := names(m); got[0] != "A prefix" {
+		t.Fatalf("order: %v", got)
+	}
+	press(m, "m") // cursor is on a prefix
+	if n, size := m.selectedSize(); n != 2 || size != 5e9 {
+		t.Fatalf("m marked n=%d size=%d, want both prefixes", n, size)
+	}
+	if !strings.Contains(m.viewList(), "mark type") {
+		t.Error("help line missing mark type")
+	}
+	press(m, "enter")
+	if !strings.Contains(m.viewConfirm(), "2 Proton prefixes may hold save files") {
+		t.Errorf("no save warning:\n%s", m.viewConfirm())
+	}
+	press(m, "esc")
+	press(m, "m")
+	if n, _ := m.selectedSize(); n != 0 {
+		t.Fatalf("second m should unmark, n=%d", n)
+	}
+}
