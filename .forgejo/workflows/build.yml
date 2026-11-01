@@ -1,0 +1,94 @@
+# steamsweep CI. Runners use the host executor (no docker, no node), so there are no `uses:` actions:
+# checkout is plain git with the job token. Needs go, zip, jq and curl on the runner.
+#
+# Optional secret (Settings > Actions): FORGEJO_RELEASE_TOKEN, a personal access token with
+# write:repository, used when the job token is not allowed to create releases.
+#
+# Tag v0.1.0 -> release "steamsweep 0.1.0" with notes from the "## 0.1.0" section of CHANGELOG.md.
+name: build
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+
+concurrency:
+  group: steamsweep-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  test:
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    runs-on: orion
+    steps:
+      - name: Checkout
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rm -rf src && mkdir src && cd src
+          git init -q .
+          git remote add origin "${{ github.server_url }}/${{ github.repository }}.git"
+          git -c http.extraheader="Authorization: token $TOKEN" fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+      - name: Vet and test
+        working-directory: src
+        run: |
+          go vet ./...
+          go test ./...
+      - name: Cross-compile
+        working-directory: src
+        run: bash scripts/build-release.sh 0.0.0-ci "$RUNNER_TEMP/dist"
+
+  release:
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: orion
+    steps:
+      - name: Checkout
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rm -rf src && mkdir src && cd src
+          git init -q .
+          git remote add origin "${{ github.server_url }}/${{ github.repository }}.git"
+          git -c http.extraheader="Authorization: token $TOKEN" fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+
+      - name: Release notes
+        working-directory: src
+        run: |
+          set -euo pipefail
+          # Fails the job when CHANGELOG.md has no (or an empty) section for this version.
+          bash scripts/release-notes.sh "${{ github.ref_name }}" CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
+      - name: Test and build
+        working-directory: src
+        run: |
+          set -euo pipefail
+          go vet ./...
+          go test ./...
+          bash scripts/build-release.sh "${{ github.ref_name }}" "$RUNNER_TEMP/dist"
+
+      - name: Forgejo release
+        env:
+          RELEASE_TOKEN: ${{ secrets.FORGEJO_RELEASE_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          api="${{ github.server_url }}/api/v1/repos/${{ github.repository }}"
+          body="$(jq -n --arg tag "${{ github.ref_name }}" --arg name "steamsweep ${{ github.ref_name }}" --rawfile notes "$RUNNER_TEMP/notes.md" \
+            '{tag_name:$tag, name:$name, body:$notes, draft:false, prerelease:false}')"
+          id="$(curl -fsS -X POST "$api/releases" -H "Authorization: token $RELEASE_TOKEN" \
+            -H 'Content-Type: application/json' -d "$body" | jq -r .id)"
+          test -n "$id" && test "$id" != null
+          for f in "$RUNNER_TEMP"/dist/*; do
+            curl -fsS -X POST "$api/releases/$id/assets?name=$(basename "$f")" \
+              -H "Authorization: token $RELEASE_TOKEN" -F "attachment=@$f" > /dev/null
+          done
+          echo "Created release $id"
+
+      - name: Clean up
+        if: ${{ always() }}
+        run: rm -rf "$RUNNER_TEMP/dist" "$RUNNER_TEMP/notes.md"
