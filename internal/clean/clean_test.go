@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ShatteredEagle/steamsweep/internal/steam"
 )
@@ -172,5 +173,43 @@ func TestSelectAndParseKinds(t *testing.T) {
 	}
 	if _, err := ParseKinds(" "); err == nil {
 		t.Error("accepted an empty list")
+	}
+}
+
+func TestRecordingsClipsAndAge(t *testing.T) {
+	root, games := fixture(t)
+	rec := filepath.Join(root, "userdata", "1", "gamerecordings")
+	write(t, filepath.Join(rec, "clips", "clip_100_20200101_120000", "c.mp4"), 50)
+	items := Scan(root, []string{root}, games).Items
+	got := byName(items)
+	clip, ok := got["Kept Game clip, 2020-01-01 12:00"]
+	if !ok || clip.Kind != KindRecording || clip.Modified.Year() != 2020 {
+		t.Fatalf("clip not found or wrong: %+v (have %v)", clip, keys(got))
+	}
+
+	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.Local)
+	kept := byName(OlderThan(items, 30*24*time.Hour, now))
+	if _, ok := kept["Kept Game recording, 2026-10-06 13:08"]; ok {
+		t.Error("a 26-day-old recording must be kept out by --older-than 30d")
+	}
+	if _, ok := kept["Kept Game clip, 2020-01-01 12:00"]; !ok {
+		t.Error("6-year-old clip should pass --older-than 30d")
+	}
+	if _, ok := kept["Gone"]; !ok {
+		t.Error("non-recordings must pass through the age filter")
+	}
+}
+
+func TestParseAge(t *testing.T) {
+	cases := map[string]time.Duration{"30d": 30 * 24 * time.Hour, "2w": 14 * 24 * time.Hour, "12h": 12 * time.Hour, "90m": 90 * time.Minute}
+	for in, want := range cases {
+		if got, err := ParseAge(in); err != nil || got != want {
+			t.Errorf("ParseAge(%q)=%v,%v want %v", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"", "d", "abc", "-5d", "5x"} {
+		if _, err := ParseAge(bad); err == nil {
+			t.Errorf("ParseAge(%q) accepted", bad)
+		}
 	}
 }

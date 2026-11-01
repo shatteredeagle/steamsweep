@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0
+
+- `steamsweep clean --recordings` also deletes Steam game recordings and saved clips, with their timeline files. `--older-than 30d` (or `2w`, `12h`) limits it to recordings older than that, so a timer can keep recent ones.
+- The scanner now also looks in Steam's saved-clips folder, not only the background recording folder.
+
 ## 0.3.0
 
 - New `steamsweep clean` command for unattended cleanup, for example on a timer. By default it deletes only leftovers of uninstalled games (orphaned game folders, shader cache and Workshop data); `--include` opts in to other types such as Proton prefixes. Supports `--dry-run`, `--yes`, `--close-steam` and `--if-closed`. The README has a ready-made systemd timer.

@@ -88,6 +88,8 @@ func runClean(args []string) {
 	fs := flag.NewFlagSet("clean", flag.ExitOnError)
 	root := fs.String("steam-root", "", "Steam install directory (default: auto-detect)")
 	include := fs.String("include", "leftover", "comma-separated types to delete: leftover, cache, prefix, recording, proton, partial")
+	recordings := fs.Bool("recordings", false, "also delete Steam game recordings and saved clips (see --older-than)")
+	olderThan := fs.String("older-than", "", "with recordings: only those older than this, e.g. 30d, 2w, 12h")
 	dry := fs.Bool("dry-run", false, "list what would be deleted, delete nothing")
 	yes := fs.Bool("yes", false, "do not ask for confirmation (needed for timers and scripts)")
 	closeSteam := fs.Bool("close-steam", false, "close Steam first if it is running")
@@ -99,6 +101,17 @@ func runClean(args []string) {
 		fmt.Fprintln(os.Stderr, "steamsweep:", err)
 		os.Exit(2)
 	}
+	if *recordings {
+		kinds = append(kinds, clean.KindRecording)
+	}
+	var age time.Duration
+	if *olderThan != "" {
+		var aerr error
+		if age, aerr = clean.ParseAge(*olderThan); aerr != nil {
+			fmt.Fprintln(os.Stderr, "steamsweep:", aerr)
+			os.Exit(2)
+		}
+	}
 	r, err := steam.FindRoot(*root)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "steamsweep:", err)
@@ -106,6 +119,9 @@ func runClean(args []string) {
 	}
 	libs := steam.Libraries(r)
 	res := clean.Scan(r, libs, steam.Installed(libs))
+	if *olderThan != "" {
+		res.Items = clean.OlderThan(res.Items, age, time.Now())
+	}
 	for _, w := range res.Warnings {
 		fmt.Fprintln(os.Stderr, "warning:", w)
 	}
@@ -119,7 +135,11 @@ func runClean(args []string) {
 		fmt.Println("nothing to clean")
 		return
 	}
-	fmt.Printf("%d items, %s\n", len(items), humanSize(total))
+	noun := "items"
+	if len(items) == 1 {
+		noun = "item"
+	}
+	fmt.Printf("%d %s, %s\n", len(items), noun, humanSize(total))
 	if *dry {
 		return
 	}

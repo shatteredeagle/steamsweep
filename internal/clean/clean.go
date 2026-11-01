@@ -35,6 +35,8 @@ type Item struct {
 	Paths []string
 	Size  int64
 	Safe  bool // included by "mark all"; false for anything that may hold personal data or progress
+	// Modified is when a recording was made (from its folder name, else the folder's mtime); zero for other kinds.
+	Modified time.Time
 }
 
 // Result is what a scan found, plus reasons it skipped anything.
@@ -241,44 +243,92 @@ func Scan(root string, libs []string, games []steam.Game) Result {
 	return res
 }
 
+// recordingDirs are the folders under gamerecordings that hold one directory per recording:
+// video holds Steam's background recording, clips the clips you saved.
+var recordingDirs = []string{"video", "clips"}
+
 func recordingAppIDs(root string) []string {
 	var ids []string
-	bases, _ := filepath.Glob(filepath.Join(root, "userdata", "*", "gamerecordings", "video"))
+	bases, _ := filepath.Glob(filepath.Join(root, "userdata", "*", "gamerecordings"))
 	for _, base := range bases {
-		for _, d := range dirs(base) {
-			if m := recDir.FindStringSubmatch(d); m != nil {
-				ids = append(ids, m[1])
+		for _, sub := range recordingDirs {
+			for _, d := range dirs(filepath.Join(base, sub)) {
+				if m := recDir.FindStringSubmatch(d); m != nil {
+					ids = append(ids, m[1])
+				}
 			}
 		}
 	}
 	return ids
 }
 
-var recDir = regexp.MustCompile(`^bg_(\d+)_(\d{8})_(\d{6})$`)
+var recDir = regexp.MustCompile(`^(?:bg|clip)_(\d+)_(\d{8})_(\d{6})$`)
 
 func recordings(root string, names map[string]string) []Item {
 	var out []Item
-	users, _ := filepath.Glob(filepath.Join(root, "userdata", "*", "gamerecordings"))
-	for _, base := range users {
-		for _, d := range dirs(filepath.Join(base, "video")) {
-			p := filepath.Join(base, "video", d)
-			it := Item{Key: "rec:" + p, Name: d, Kind: KindRecording, Paths: []string{p}}
-			if m := recDir.FindStringSubmatch(d); m != nil {
-				if t, err := time.ParseInLocation("20060102 150405", m[2]+" "+m[3], time.Local); err == nil {
-					it.Name = fmt.Sprintf("%s recording, %s", appName(names, m[1]), t.Format("2006-01-02 15:04"))
-				}
-				// Steam names the matching timeline timeline_<appid><date>_<time>.json
-				if tl := filepath.Join(base, "timelines", "timeline_"+m[1]+m[2]+"_"+m[3]+".json"); exists(tl) {
-					it.Paths = append(it.Paths, tl)
-				}
+	bases, _ := filepath.Glob(filepath.Join(root, "userdata", "*", "gamerecordings"))
+	for _, base := range bases {
+		for _, sub := range recordingDirs {
+			label := "recording"
+			if sub == "clips" {
+				label = "clip"
 			}
-			it.Size = sum(it.Paths)
-			if it.Size > 0 {
-				out = append(out, it)
+			for _, d := range dirs(filepath.Join(base, sub)) {
+				p := filepath.Join(base, sub, d)
+				it := Item{Key: "rec:" + p, Name: d, Kind: KindRecording, Paths: []string{p}}
+				if fi, err := os.Stat(p); err == nil {
+					it.Modified = fi.ModTime()
+				}
+				if m := recDir.FindStringSubmatch(d); m != nil {
+					if t, err := time.ParseInLocation("20060102 150405", m[2]+" "+m[3], time.Local); err == nil {
+						it.Name = fmt.Sprintf("%s %s, %s", appName(names, m[1]), label, t.Format("2006-01-02 15:04"))
+						it.Modified = t
+					}
+					// Steam names the matching timeline timeline_<appid><date>_<time>.json
+					if tl := filepath.Join(base, "timelines", "timeline_"+m[1]+m[2]+"_"+m[3]+".json"); exists(tl) {
+						it.Paths = append(it.Paths, tl)
+					}
+				}
+				it.Size = sum(it.Paths)
+				if it.Size > 0 {
+					out = append(out, it)
+				}
 			}
 		}
 	}
 	return out
+}
+
+// OlderThan drops recordings made within the last d; every other kind passes through unchanged.
+func OlderThan(items []Item, d time.Duration, now time.Time) []Item {
+	var out []Item
+	for _, it := range items {
+		if it.Kind == KindRecording && !it.Modified.IsZero() && it.Modified.After(now.Add(-d)) {
+			continue
+		}
+		out = append(out, it)
+	}
+	return out
+}
+
+// ParseAge understands "30d", "2w", "12h", "90m" and anything time.ParseDuration accepts.
+func ParseAge(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if len(s) > 1 {
+		unit := map[byte]time.Duration{'d': 24 * time.Hour, 'w': 7 * 24 * time.Hour}[s[len(s)-1]]
+		if unit != 0 {
+			n, err := strconv.ParseFloat(s[:len(s)-1], 64)
+			if err != nil || n < 0 {
+				return 0, fmt.Errorf("bad age %q", s)
+			}
+			return time.Duration(n * float64(unit)), nil
+		}
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d < 0 {
+		return 0, fmt.Errorf("bad age %q (try 30d, 2w or 12h)", s)
+	}
+	return d, nil
 }
 
 // Remove deletes everything in the item. Every path must sit inside root or one of the libraries,
