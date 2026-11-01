@@ -6,8 +6,8 @@ import (
 	"os"
 	"runtime/debug"
 
-	"steamsweep/internal/steam"
-	"steamsweep/internal/ui"
+	"github.com/ShatteredEagle/steamsweep/internal/steam"
+	"github.com/ShatteredEagle/steamsweep/internal/ui"
 )
 
 // version is set by release builds via -ldflags "-X main.version=...".

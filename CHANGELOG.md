@@ -11,3 +11,4 @@ First release.
 - Close Steam from the confirm screen with `c`, or automatically with `--close-steam`.
 - `--dry-run` runs the whole UI without deleting anything; `--list` prints installed games.
 - Builds for Linux, macOS and Windows.
+- One-line installers for Linux/macOS (`install.sh`) and Windows (`install.ps1`) that verify checksums, or `go install`.

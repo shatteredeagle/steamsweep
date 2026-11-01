@@ -7,7 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"steamsweep/internal/steam"
+	"github.com/ShatteredEagle/steamsweep/internal/steam"
 )
 
 func testModel() *model {
