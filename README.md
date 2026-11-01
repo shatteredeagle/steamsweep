@@ -59,6 +59,7 @@ before installing, and accept `VERSION=v0.1.0` to pin a release.
 steamsweep                 # interactive
 steamsweep --dry-run       # run the whole UI, delete nothing (try this first)
 steamsweep --close-steam   # close Steam automatically before uninstalling
+steamsweep update          # install the latest release
 steamsweep --list          # print installed games and exit
 steamsweep --list-cleanup  # print cleanup candidates and exit (read-only)
 steamsweep --steam-root /path/to/Steam
@@ -78,6 +79,20 @@ steamsweep --steam-root /path/to/Steam
 | `enter` | Review and confirm the uninstall |
 
 On the confirm screen: `y` uninstalls, `p` also deletes the Proton prefix, `c` closes Steam, `esc` cancels.
+
+## Updates
+
+steamsweep checks GitHub for a newer release when it starts, at most once a day, and shows `⬆ vX.Y.Z available` in
+the header. Press `u` to install it, or run `steamsweep update` (`--check` only reports). The download is verified
+against the release's SHA-256 checksum before the binary is replaced.
+
+```sh
+steamsweep update --auto on    # install new releases automatically at startup (off to disable)
+steamsweep --no-update-check   # skip the check (or set STEAMSWEEP_NO_UPDATE_CHECK=1)
+```
+
+The check is one request to the GitHub API and sends nothing about you. Builds made with `go build` (version `dev`)
+never check. If steamsweep is installed somewhere you can't write to, such as a system package, update it there instead.
 
 ## Cleanup tab
 

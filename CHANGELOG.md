@@ -5,6 +5,7 @@
 - New Cleanup tab (press `tab`): recordings, leftovers from uninstalled games, Proton prefixes, caches, logs, incomplete downloads and old Proton builds, with the same mark-and-confirm flow. Marks carry across tabs, so you can clear games and clutter in one pass.
 - `a` on the Cleanup tab marks only the regenerable and ownerless items; recordings, prefixes, partial downloads and Proton builds are always marked by hand.
 - Leftover detection turns itself off with a warning when a configured library is missing (for example an unmounted drive).
+- Built-in updates: checks GitHub for a newer release at most once a day and shows a banner; `u` or `steamsweep update` installs it after verifying the checksum. `steamsweep update --auto on` installs new releases automatically; `--no-update-check` turns the check off.
 - `--list-cleanup` prints the cleanup candidates without opening the UI.
 
 ## 0.1.0

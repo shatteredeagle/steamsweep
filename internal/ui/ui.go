@@ -2,6 +2,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/ShatteredEagle/steamsweep/internal/clean"
 	"github.com/ShatteredEagle/steamsweep/internal/steam"
+	"github.com/ShatteredEagle/steamsweep/internal/update"
 )
 
 var (
@@ -104,6 +106,11 @@ func (k sortKind) less(a, b entry) bool {
 type deletedMsg struct{ err error }
 type closedMsg struct{ err error }
 type scannedMsg struct{ res clean.Result }
+type updateAvailableMsg struct{ tag string }
+type updatedMsg struct {
+	tag string
+	err error
+}
 
 // Options configures a UI session.
 type Options struct {
@@ -113,6 +120,7 @@ type Options struct {
 	CloseSteam   bool // close Steam automatically before deleting
 	Root         string
 	Libs         []string
+	CheckUpdates bool // look for a newer release on GitHub (at most once a day)
 }
 
 type model struct {
@@ -135,6 +143,11 @@ type model struct {
 
 	scanning, scanned bool
 	warnings          []string
+
+	updateTag string // newer release available
+	updating  bool
+	updated   string // tag we installed this session
+	updateErr string
 
 	closing  bool
 	closeErr string
@@ -166,7 +179,42 @@ func newModel(games []steam.Game, o Options) *model {
 	return m
 }
 
-func (m *model) Init() tea.Cmd { return nil }
+func (m *model) Init() tea.Cmd {
+	if !m.opts.CheckUpdates {
+		return nil
+	}
+	current := m.opts.Version
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		u := update.Updater{}
+		_, newer, err := u.CheckCached(ctx, current, 24*time.Hour)
+		if err != nil || !newer {
+			return nil // offline or up to date: stay quiet
+		}
+		rel, err := u.Latest(ctx)
+		if err != nil {
+			return nil
+		}
+		if update.LoadConfig().AutoUpdate {
+			return updatedMsg{rel.Tag, u.Apply(ctx, rel)}
+		}
+		return updateAvailableMsg{rel.Tag}
+	}
+}
+
+func (m *model) updateCmd() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		u := update.Updater{}
+		rel, err := u.Latest(ctx)
+		if err != nil {
+			return updatedMsg{err: err}
+		}
+		return updatedMsg{rel.Tag, u.Apply(ctx, rel)}
+	}
+}
 
 func (m *model) kind() sortKind { return sortCycles[m.tab][m.sortIdx[m.tab]%len(sortCycles[m.tab])] }
 
@@ -272,6 +320,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 		m.clamp()
+	case updateAvailableMsg:
+		m.updateTag = msg.tag
+	case updatedMsg:
+		m.updating = false
+		if msg.err != nil {
+			m.updateErr = msg.err.Error()
+		} else {
+			m.updated, m.updateTag, m.updateErr = msg.tag, "", ""
+		}
 	case scannedMsg:
 		m.scanning, m.scanned = false, true
 		m.warnings = msg.res.Warnings
@@ -347,6 +404,11 @@ func (m *model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "tab":
 		return m, m.switchTab()
+	case "u":
+		if m.updateTag != "" && !m.updating {
+			m.updating, m.updateErr = true, ""
+			return m, m.updateCmd()
+		}
 	case "up", "k":
 		m.cursor--
 	case "down", "j":
@@ -594,7 +656,16 @@ func (m *model) viewList() string {
 	if m.opts.DryRun {
 		title += " " + sWarn.Render("[dry run]")
 	}
-	b.WriteString(title + "   " + m.tabBar() + "\n")
+	head := title + "   " + m.tabBar()
+	switch {
+	case m.updating:
+		head += "   " + sWarn.Render("updating…")
+	case m.updated != "":
+		head += "   " + sOK.Render("✓ updated to "+m.updated+", restart to use it")
+	case m.updateTag != "":
+		head += "   " + sWarn.Render("⬆ "+m.updateTag+" available")
+	}
+	b.WriteString(ansi.Truncate(head, m.w, "…") + "\n")
 	count := fmt.Sprintf("%d %s", len(m.view), plural(len(m.view)))
 	if m.tab == tabClean {
 		count = fmt.Sprintf("%d items", len(m.view))
@@ -698,6 +769,9 @@ func (m *model) viewList() string {
 	if m.opts.SteamRunning {
 		status += "   " + sWarn.Render("⚠ Steam is running")
 	}
+	if m.updateErr != "" {
+		status += "   " + sDanger.Render("update failed: "+m.updateErr)
+	}
 	if m.tab == tabClean && len(m.warnings) > 0 {
 		status += "   " + sWarn.Render("⚠ "+m.warnings[0])
 	}
@@ -709,6 +783,9 @@ func (m *model) viewList() string {
 	keys := [][2]string{{"↑↓", "move"}, {"space", "mark"}, {"a", "all"}, {"/", "filter"}, {"s", "sort"}, {"r", "reverse"}, {"tab", other}}
 	if m.tab == tabGames {
 		keys = append(keys, [2]string{"t", "tools"})
+	}
+	if m.updateTag != "" && !m.updating {
+		keys = append(keys, [2]string{"u", "update"})
 	}
 	keys = append(keys, [2]string{"enter", "delete"}, [2]string{"q", "quit"})
 	b.WriteString(help(keys))

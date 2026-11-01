@@ -206,3 +206,28 @@ func TestViewsRender(t *testing.T) {
 		t.Log("\n" + out)
 	}
 }
+
+func TestUpdateBanner(t *testing.T) {
+	m := testModel()
+	if strings.Contains(m.viewList(), "available") {
+		t.Fatal("banner shown with no update")
+	}
+	press(m, "u")
+	if m.updating {
+		t.Fatal("u started an update with nothing available")
+	}
+	m.Update(updateAvailableMsg{tag: "v9.9.9"})
+	out := m.viewList()
+	if !strings.Contains(out, "v9.9.9 available") || !strings.Contains(out, "update") {
+		t.Errorf("banner/help missing:\n%s", out)
+	}
+	m.Update(updatedMsg{tag: "v9.9.9"})
+	if out := m.viewList(); !strings.Contains(out, "updated to v9.9.9") || strings.Contains(out, "available") {
+		t.Errorf("post-update state wrong:\n%s", out)
+	}
+	m.updateTag = "v9.9.9"
+	m.Update(updatedMsg{err: errString("permission denied")})
+	if !strings.Contains(m.viewList(), "update failed: permission denied") {
+		t.Error("failure not shown")
+	}
+}
