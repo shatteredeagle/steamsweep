@@ -59,6 +59,7 @@ before installing, and accept `VERSION=v0.1.0` to pin a release.
 steamsweep                 # interactive
 steamsweep --dry-run       # run the whole UI, delete nothing (try this first)
 steamsweep --close-steam   # close Steam automatically before uninstalling
+steamsweep clean          # no UI: delete leftovers of uninstalled games (see Automatic cleanup)
 steamsweep update          # install the latest release
 steamsweep --list          # print installed games and exit
 steamsweep --list-cleanup  # print cleanup candidates and exit (read-only)
@@ -80,6 +81,54 @@ steamsweep --steam-root /path/to/Steam
 | `enter` | Review and confirm the uninstall |
 
 On the confirm screen: `y` uninstalls, `p` also deletes the Proton prefix, `c` closes Steam, `esc` cancels.
+
+## Automatic cleanup
+
+`steamsweep clean` does the Cleanup tab's job with no UI, for scripts and timers. By default it deletes only
+`leftover` items: game folders with no manifest, plus shader cache and Workshop data of uninstalled games. Nothing that might hold saves is touched unless you ask.
+
+```sh
+steamsweep clean --dry-run                      # show what it would delete
+steamsweep clean                                # same list, then asks y/N
+steamsweep clean --yes --if-closed              # unattended: skip quietly if Steam is running
+steamsweep clean --yes --close-steam            # close Steam first, then clean
+steamsweep clean --include leftover,cache,prefix --yes   # opt in to more types
+```
+
+`--include` takes `leftover`, `cache`, `prefix`, `recording`, `proton` and `partial`. Add `prefix` to also remove the Proton
+prefixes of uninstalled games, which can contain save files. Exit codes: 0 done or nothing to do, 1 an error (including Steam running without
+`--close-steam` or `--if-closed`), 2 bad arguments.
+
+To run it weekly on Linux, create two files in `~/.config/systemd/user/`:
+
+```ini
+# steamsweep-clean.service
+[Unit]
+Description=Clean leftovers of uninstalled Steam games
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/steamsweep clean --yes --if-closed
+```
+
+```ini
+# steamsweep-clean.timer
+[Unit]
+Description=Weekly steamsweep cleanup
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```sh
+systemctl --user daemon-reload && systemctl --user enable --now steamsweep-clean.timer
+```
+
+On Windows, `schtasks /Create /SC WEEKLY /TN steamsweep-clean /TR "steamsweep clean --yes --if-closed"` does the same; on macOS use `cron` or `launchd`.
 
 ## Updates
 

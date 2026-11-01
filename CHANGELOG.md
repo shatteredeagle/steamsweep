@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.0
+
+- New `steamsweep clean` command for unattended cleanup, for example on a timer. By default it deletes only leftovers of uninstalled games (orphaned game folders, shader cache and Workshop data); `--include` opts in to other types such as Proton prefixes. Supports `--dry-run`, `--yes`, `--close-steam` and `--if-closed`. The README has a ready-made systemd timer.
+
 ## 0.2.1
 
 - Leftovers, Proton prefixes and recordings of uninstalled games are now named (for example "Valheim Proton prefix") using Steam's local app database, instead of showing a bare app id.

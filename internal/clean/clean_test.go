@@ -150,3 +150,27 @@ func TestOrphanNamesFromAppInfo(t *testing.T) {
 		t.Errorf("orphan prefix not named from appinfo; have %v", keys(got))
 	}
 }
+
+func TestSelectAndParseKinds(t *testing.T) {
+	root, games := fixture(t)
+	items := Scan(root, []string{root}, games).Items
+	kinds, err := ParseKinds("leftover")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := Select(items, kinds)
+	if len(got) == 0 {
+		t.Fatal("selected nothing")
+	}
+	for _, it := range got {
+		if it.Kind != KindLeftover {
+			t.Errorf("selected %s of kind %s", it.Name, it.Kind)
+		}
+	}
+	if _, err := ParseKinds("leftover,bogus"); err == nil {
+		t.Error("accepted an unknown type")
+	}
+	if _, err := ParseKinds(" "); err == nil {
+		t.Error("accepted an empty list")
+	}
+}

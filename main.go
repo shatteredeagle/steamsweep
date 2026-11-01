@@ -82,10 +82,116 @@ func runUpdate(args []string) {
 	fmt.Println("updated to", rel.Tag)
 }
 
-func main() {
-	if len(os.Args) > 1 && os.Args[1] == "update" {
-		runUpdate(os.Args[2:])
+// runClean is the unattended mode: delete cleanup items of the chosen types, no UI.
+// By default only "leftover" (folders and caches of uninstalled games) is removed, so it is safe on a timer.
+func runClean(args []string) {
+	fs := flag.NewFlagSet("clean", flag.ExitOnError)
+	root := fs.String("steam-root", "", "Steam install directory (default: auto-detect)")
+	include := fs.String("include", "leftover", "comma-separated types to delete: leftover, cache, prefix, recording, proton, partial")
+	dry := fs.Bool("dry-run", false, "list what would be deleted, delete nothing")
+	yes := fs.Bool("yes", false, "do not ask for confirmation (needed for timers and scripts)")
+	closeSteam := fs.Bool("close-steam", false, "close Steam first if it is running")
+	ifClosed := fs.Bool("if-closed", false, "exit quietly with success when Steam is running instead of failing")
+	fs.Parse(args)
+
+	kinds, err := clean.ParseKinds(*include)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "steamsweep:", err)
+		os.Exit(2)
+	}
+	r, err := steam.FindRoot(*root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "steamsweep:", err)
+		os.Exit(1)
+	}
+	libs := steam.Libraries(r)
+	res := clean.Scan(r, libs, steam.Installed(libs))
+	for _, w := range res.Warnings {
+		fmt.Fprintln(os.Stderr, "warning:", w)
+	}
+	items := clean.Select(res.Items, kinds)
+	var total int64
+	for _, it := range items {
+		fmt.Printf("%-9s %10s  %s\n", it.Kind, humanSize(it.Size), it.Name)
+		total += it.Size
+	}
+	if len(items) == 0 {
+		fmt.Println("nothing to clean")
 		return
+	}
+	fmt.Printf("%d items, %s\n", len(items), humanSize(total))
+	if *dry {
+		return
+	}
+
+	if steam.Running() {
+		switch {
+		case *closeSteam:
+			fmt.Println("closing Steam ...")
+			if err := steam.Close(); err != nil {
+				fmt.Fprintln(os.Stderr, "steamsweep:", err)
+				os.Exit(1)
+			}
+		case *ifClosed:
+			fmt.Println("Steam is running; skipping")
+			return
+		default:
+			fmt.Fprintln(os.Stderr, "steamsweep: Steam is running; close it, or use --close-steam or --if-closed")
+			os.Exit(1)
+		}
+	}
+	if !*yes {
+		fmt.Print("Delete these permanently? [y/N] ")
+		var ans string
+		fmt.Scanln(&ans)
+		if ans != "y" && ans != "Y" {
+			fmt.Println("cancelled")
+			return
+		}
+	}
+	var freed int64
+	failed := 0
+	for _, it := range items {
+		if err := clean.Remove(it, r, libs, false); err != nil {
+			fmt.Fprintf(os.Stderr, "failed: %s: %v\n", it.Name, err)
+			failed++
+			continue
+		}
+		freed += it.Size
+	}
+	fmt.Printf("freed %s", humanSize(freed))
+	if failed > 0 {
+		fmt.Printf(", %d failed", failed)
+	}
+	fmt.Println()
+	if failed > 0 {
+		os.Exit(1)
+	}
+}
+
+func humanSize(b int64) string {
+	const unit = 1000
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "kMGTPE"[exp])
+}
+
+func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "update":
+			runUpdate(os.Args[2:])
+			return
+		case "clean":
+			runClean(os.Args[2:])
+			return
+		}
 	}
 	root := flag.String("steam-root", "", "Steam install directory (default: auto-detect)")
 	dry := flag.Bool("dry-run", false, "go through the motions without deleting anything")

@@ -308,3 +308,42 @@ func Remove(it Item, root string, libs []string, dryRun bool) error {
 	}
 	return nil
 }
+
+// Select returns the items whose kind is in kinds, never including anything outside that list.
+func Select(items []Item, kinds []Kind) []Item {
+	want := map[Kind]bool{}
+	for _, k := range kinds {
+		want[k] = true
+	}
+	var out []Item
+	for _, it := range items {
+		if want[it.Kind] {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// ParseKinds turns "leftover,prefix" into kinds, rejecting names that do not exist.
+func ParseKinds(csv string) ([]Kind, error) {
+	valid := map[string]Kind{}
+	for _, k := range []Kind{KindRecording, KindLeftover, KindPrefix, KindCache, KindProton, KindDownload} {
+		valid[string(k)] = k
+	}
+	var out []Kind
+	for _, f := range strings.Split(csv, ",") {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		k, ok := valid[f]
+		if !ok {
+			return nil, fmt.Errorf("unknown type %q (have recording, leftover, prefix, cache, proton, partial)", f)
+		}
+		out = append(out, k)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no types given")
+	}
+	return out, nil
+}
