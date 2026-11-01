@@ -3,6 +3,7 @@ package clean
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ShatteredEagle/steamsweep/internal/steam"
@@ -22,7 +23,7 @@ func fixture(t *testing.T) (root string, games []steam.Game) {
 	root = t.TempDir()
 	sa := filepath.Join(root, "steamapps")
 	write(t, filepath.Join(sa, "libraryfolders.vdf"), 0)
-	os.WriteFile(filepath.Join(sa, "libraryfolders.vdf"), []byte(`"libraryfolders" { "0" { "path" "`+root+`" } }`), 0o644)
+	os.WriteFile(filepath.Join(sa, "libraryfolders.vdf"), []byte(`"libraryfolders" { "0" { "path" "`+vdfPath(root)+`" } }`), 0o644)
 	write(t, filepath.Join(sa, "common", "Kept", "a.bin"), 10)
 	write(t, filepath.Join(sa, "common", "Gone", "a.bin"), 20)
 	write(t, filepath.Join(sa, "common", "Proton 9.0", "a.bin"), 30)
@@ -82,7 +83,7 @@ func keys(m map[string]Item) []string {
 func TestMissingLibrarySkipsLeftovers(t *testing.T) {
 	root, games := fixture(t)
 	os.WriteFile(filepath.Join(root, "steamapps", "libraryfolders.vdf"),
-		[]byte(`"libraryfolders" { "0" { "path" "`+root+`" } "1" { "path" "/nonexistent/mnt/games" } }`), 0o644)
+		[]byte(`"libraryfolders" { "0" { "path" "`+vdfPath(root)+`" } "1" { "path" "/nonexistent/mnt/games" } }`), 0o644)
 	res := Scan(root, []string{root}, games)
 	if len(res.Warnings) != 1 {
 		t.Fatalf("want a warning, got %v", res.Warnings)
@@ -117,3 +118,6 @@ func TestRemove(t *testing.T) {
 		t.Error("must refuse the Steam root itself")
 	}
 }
+
+// vdfPath escapes backslashes the way Steam writes Windows paths in .vdf files.
+func vdfPath(p string) string { return strings.ReplaceAll(p, `\`, `\\`) }

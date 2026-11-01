@@ -3,6 +3,7 @@ package steam
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -17,7 +18,7 @@ func fixture(t *testing.T) (root string) {
 	}
 	os.WriteFile(filepath.Join(sa, "common/Cool Game/data.bin"), []byte("x"), 0o644)
 	os.WriteFile(filepath.Join(sa, "libraryfolders.vdf"),
-		[]byte(`"libraryfolders" { "0" { "path" "`+root+`" } }`), 0o644)
+		[]byte(`"libraryfolders" { "0" { "path" "`+vdfPath(root)+`" } }`), 0o644)
 	os.WriteFile(filepath.Join(sa, "appmanifest_100.acf"), []byte(`"AppState"
 {
 	"appid"		"100"
@@ -88,3 +89,6 @@ func TestUnsafeInstallDir(t *testing.T) {
 		t.Error("expected refusal")
 	}
 }
+
+// vdfPath escapes backslashes the way Steam writes Windows paths in .vdf files.
+func vdfPath(p string) string { return strings.ReplaceAll(p, `\`, `\\`) }
