@@ -1,0 +1,6 @@
+[Unit]
+Description=Clean leftovers of uninstalled Steam games
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/steamsweep clean --yes --if-closed

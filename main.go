@@ -18,6 +18,10 @@ import (
 // version is set by release builds via -ldflags "-X main.version=...".
 var version = ""
 
+// packagedBy is set by distro packages (-X main.packagedBy=pacman). Such installs are updated by the
+// package manager, so the built-in update check and self-update are switched off.
+var packagedBy = ""
+
 func buildVersion() string {
 	if version != "" {
 		return version
@@ -33,6 +37,10 @@ func buildVersion() string {
 }
 
 func runUpdate(args []string) {
+	if packagedBy != "" {
+		fmt.Printf("steamsweep was installed with %s; update it through your package manager.\n", packagedBy)
+		return
+	}
 	fs := flag.NewFlagSet("update", flag.ExitOnError)
 	check := fs.Bool("check", false, "only report whether a newer release exists")
 	auto := fs.String("auto", "", "turn automatic updates on or off (on|off)")
@@ -254,7 +262,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "steamsweep: no installed games found in", r)
 		os.Exit(1)
 	}
-	if err := ui.Run(games, ui.Options{CheckUpdates: !*noUpdate && os.Getenv("STEAMSWEEP_NO_UPDATE_CHECK") == "", Root: r, Libs: libs, DryRun: *dry, CloseSteam: *closeSteam, SteamRunning: steam.Running(), Version: buildVersion()}); err != nil {
+	if err := ui.Run(games, ui.Options{CheckUpdates: packagedBy == "" && !*noUpdate && os.Getenv("STEAMSWEEP_NO_UPDATE_CHECK") == "", Root: r, Libs: libs, DryRun: *dry, CloseSteam: *closeSteam, SteamRunning: steam.Running(), Version: buildVersion()}); err != nil {
 		fmt.Fprintln(os.Stderr, "steamsweep:", err)
 		os.Exit(1)
 	}

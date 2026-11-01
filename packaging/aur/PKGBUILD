@@ -1,0 +1,42 @@
+# Maintainer: ShatteredEagle <shatteredeagle@gmail.com>
+pkgname=steamsweep
+pkgver=0.4.0
+pkgrel=1
+pkgdesc='Terminal UI to bulk-uninstall Steam games and clean up Steam clutter'
+arch=('x86_64' 'aarch64')
+url='https://github.com/ShatteredEagle/steamsweep'
+license=('GPL-3.0-or-later')
+makedepends=('go')
+optdepends=('steam: the client this tool manages')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export GOPATH="$srcdir/gopath"
+  go mod download -modcacherw
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export GOPATH="$srcdir/gopath"
+  export CGO_ENABLED=0
+  go build -trimpath -mod=readonly -modcacherw \
+    -ldflags "-s -w -X main.version=$pkgver -X main.packagedBy=pacman" \
+    -o "$pkgname" .
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  export GOPATH="$srcdir/gopath"
+  go test ./...
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 "$pkgname" "$pkgdir/usr/bin/$pkgname"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 CHANGELOG.md "$pkgdir/usr/share/doc/$pkgname/CHANGELOG.md"
+  install -Dm644 packaging/systemd/steamsweep-clean.service "$pkgdir/usr/lib/systemd/user/steamsweep-clean.service"
+  install -Dm644 packaging/systemd/steamsweep-clean.timer "$pkgdir/usr/lib/systemd/user/steamsweep-clean.timer"
+}

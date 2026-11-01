@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1
+
+- Arch Linux packaging: a PKGBUILD for the AUR (in `packaging/aur`) and ready-made `systemd` user units for the weekly cleanup (`packaging/systemd`), installed by the package.
+- Builds made by a distribution package (`-X main.packagedBy=...`) turn off the built-in update check and `steamsweep update`, which point you at your package manager instead.
+
 ## 0.4.0
 
 - `steamsweep clean --older-than 30d` (or `2w`, `12h`) limits recordings to those older than that, so a timer can delete old recordings with `--include recording` and keep recent ones. It only applies to recordings.
