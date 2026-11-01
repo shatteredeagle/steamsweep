@@ -43,12 +43,14 @@ const (
 )
 
 type deletedMsg struct{ err error }
+type closedMsg struct{ err error }
 
 // Options configures a UI session.
 type Options struct {
 	DryRun       bool
 	SteamRunning bool
 	Version      string
+	CloseSteam   bool // close Steam automatically before uninstalling
 }
 
 type model struct {
@@ -66,10 +68,12 @@ type model struct {
 	bySize    bool
 	prefix    bool
 
-	queue  []steam.Game
-	qIdx   int
-	freed  int64
-	failed []string
+	closing  bool
+	closeErr string
+	queue    []steam.Game
+	qIdx     int
+	freed    int64
+	failed   []string
 }
 
 func key(g steam.Game) string { return g.Library + "\x00" + g.AppID }
@@ -170,6 +174,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 		m.clamp()
+	case closedMsg:
+		m.closing = false
+		m.opts.SteamRunning = steam.Running()
+		if msg.err != nil {
+			m.closeErr = msg.err.Error()
+			m.mode = modeConfirm // back to the confirm screen so nothing is deleted under a live Steam
+			return m, nil
+		}
+		m.closeErr = ""
+		if m.mode == modeDeleting {
+			return m, m.uninstallCmd()
+		}
 	case deletedMsg:
 		g := m.queue[m.qIdx]
 		if msg.err != nil {
@@ -294,18 +310,34 @@ func (m *model) updateFilter(msg tea.KeyPressMsg) {
 }
 
 func (m *model) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.closing {
+		return m, nil
+	}
 	switch msg.String() {
 	case "y", "enter":
 		m.queue = m.selectedGames()
 		m.qIdx, m.freed, m.failed = 0, 0, nil
 		m.mode = modeDeleting
+		if m.opts.SteamRunning && m.opts.CloseSteam {
+			m.closing = true
+			return m, closeCmd()
+		}
 		return m, m.uninstallCmd()
+	case "c":
+		if m.opts.SteamRunning {
+			m.closing, m.closeErr = true, ""
+			return m, closeCmd()
+		}
 	case "p":
 		m.prefix = !m.prefix
 	case "n", "esc", "q":
 		m.mode = modeList
 	}
 	return m, nil
+}
+
+func closeCmd() tea.Cmd {
+	return func() tea.Msg { return closedMsg{steam.Close()} }
 }
 
 func (m *model) uninstallCmd() tea.Cmd {
@@ -501,13 +533,25 @@ func (m *model) viewConfirm() string {
 		pfx = sDanger.Render("●") + " also delete Proton prefix and shader cache"
 	}
 	b.WriteString("\n" + pfx + "\n")
-	if m.opts.SteamRunning {
-		b.WriteString("\n" + sWarn.Render("⚠ Steam is running. Quit it first or it may restore the library state.") + "\n")
+	switch {
+	case m.closing:
+		b.WriteString("\n" + sWarn.Render("Closing Steam…") + "\n")
+	case m.opts.SteamRunning && m.opts.CloseSteam:
+		b.WriteString("\n" + sWarn.Render("⚠ Steam is running and will be closed first.") + "\n")
+	case m.opts.SteamRunning:
+		b.WriteString("\n" + sWarn.Render("⚠ Steam is running. Press c to close it, or it may restore the library state.") + "\n")
+	}
+	if m.closeErr != "" {
+		b.WriteString(sDanger.Render("✗ "+m.closeErr) + "\n")
 	}
 	if m.opts.DryRun {
 		b.WriteString("\n" + sWarn.Render("dry run: nothing will be deleted") + "\n")
 	}
-	b.WriteString("\n" + help([][2]string{{"y", "uninstall"}, {"p", "prefix"}, {"esc", "cancel"}}))
+	keys := [][2]string{{"y", "uninstall"}, {"p", "prefix"}, {"esc", "cancel"}}
+	if m.opts.SteamRunning {
+		keys = append(keys[:2], [2]string{"c", "close Steam"}, keys[2])
+	}
+	b.WriteString("\n" + help(keys))
 	return m.box(b.String())
 }
 
@@ -521,6 +565,10 @@ func (m *model) viewProgress() string {
 			b.WriteString(sDanger.Render("✗ ") + f + "\n")
 		}
 		b.WriteString("\n" + sMuted.Render("Press any key to exit."))
+		return m.box(b.String())
+	}
+	if m.closing {
+		b.WriteString(sTitle.Render("Closing Steam…") + "\n\n" + sMuted.Render("Waiting for the client to exit."))
 		return m.box(b.String())
 	}
 	b.WriteString(sTitle.Render("Uninstalling…") + "\n\n")

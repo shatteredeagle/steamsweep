@@ -26,6 +26,7 @@ func buildVersion() string {
 func main() {
 	root := flag.String("steam-root", "", "Steam install directory (default: auto-detect)")
 	dry := flag.Bool("dry-run", false, "go through the motions without deleting anything")
+	closeSteam := flag.Bool("close-steam", false, "close Steam automatically before uninstalling")
 	list := flag.Bool("list", false, "print installed games and exit")
 	showVer := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
@@ -50,7 +51,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "steamsweep: no installed games found in", r)
 		os.Exit(1)
 	}
-	if err := ui.Run(games, ui.Options{DryRun: *dry, SteamRunning: steam.Running(), Version: buildVersion()}); err != nil {
+	if err := ui.Run(games, ui.Options{DryRun: *dry, CloseSteam: *closeSteam, SteamRunning: steam.Running(), Version: buildVersion()}); err != nil {
 		fmt.Fprintln(os.Stderr, "steamsweep:", err)
 		os.Exit(1)
 	}

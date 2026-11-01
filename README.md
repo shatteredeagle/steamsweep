@@ -21,6 +21,7 @@ go build -o steamsweep . && install -m755 steamsweep ~/.local/bin/
 ```
 steamsweep              # interactive
 steamsweep --dry-run    # full UI, deletes nothing
+steamsweep --close-steam  # close Steam automatically before uninstalling
 steamsweep --list       # print installed games
 steamsweep --steam-root /path/to/Steam
 ```
@@ -37,7 +38,7 @@ steamsweep --steam-root /path/to/Steam
 
 Uninstall deletes `steamapps/common/<installdir>` and the app's `appmanifest`. The Proton prefix
 (`compatdata`, may contain saves) is kept unless you turn on the prefix option in the confirm screen.
-Close Steam first; it rewrites its library files while running.
+Steam rewrites its library files while running, so close it first. On the confirm screen press `c` to close it (polite shutdown, then terminate, then kill), or start with `--close-steam` to do it automatically.
 
 Reads every library in `libraryfolders.vdf`. Looks in the standard Linux (incl. Flatpak, Snap), macOS and Windows locations.
 

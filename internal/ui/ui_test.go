@@ -98,3 +98,20 @@ func TestViewRenders(t *testing.T) {
 		t.Log("\n" + m.viewConfirm())
 	}
 }
+
+func TestCloseFailureReturnsToConfirm(t *testing.T) {
+	m := testModel()
+	m.opts.SteamRunning = true
+	m.mode, m.closing = modeDeleting, true
+	m.queue = m.all[:1]
+	m.Update(closedMsg{err: errTest})
+	if m.mode != modeConfirm || m.closeErr == "" {
+		t.Fatalf("mode=%v closeErr=%q", m.mode, m.closeErr)
+	}
+}
+
+var errTest = errString("still running")
+
+type errString string
+
+func (e errString) Error() string { return string(e) }
