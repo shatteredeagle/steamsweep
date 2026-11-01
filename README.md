@@ -60,6 +60,7 @@ steamsweep                 # interactive
 steamsweep --dry-run       # run the whole UI, delete nothing (try this first)
 steamsweep --close-steam   # close Steam automatically before uninstalling
 steamsweep --list          # print installed games and exit
+steamsweep --list-cleanup  # print cleanup candidates and exit (read-only)
 steamsweep --steam-root /path/to/Steam
 ```
 
@@ -71,11 +72,33 @@ steamsweep --steam-root /path/to/Steam
 | `space` | Mark or unmark, then move down |
 | `a` / `i` / `c` | Mark everything shown / invert / clear marks |
 | `/` | Filter by name (`esc` clears) |
-| `s` / `r` | Cycle sort: size, last played, last updated, name / reverse it |
-| `t` | Show Proton and runtime tools (hidden by default) |
+| `s` / `r` | Cycle sort / reverse it (Games: size, last played, last updated, name. Cleanup: size, type, name) |
+| `tab` | Switch between the Games and Cleanup tabs |
+| `t` | Show Proton and runtime tools on the Games tab (hidden by default) |
 | `enter` | Review and confirm the uninstall |
 
 On the confirm screen: `y` uninstalls, `p` also deletes the Proton prefix, `c` closes Steam, `esc` cancels.
+
+## Cleanup tab
+
+Press `tab` for everything else that eats disk space. Items are scanned when you first open the tab and use the
+same mark-and-confirm flow, so you can clear games and clutter in one pass. Marks carry across tabs.
+
+| Type | What it is | `a` marks it? |
+| --- | --- | --- |
+| `recording` | Game recordings and their timeline files (`userdata/*/gamerecordings/video`) | no |
+| `leftover` | Game folders with no manifest, plus shader cache and Workshop data for uninstalled games | yes |
+| `prefix` | Proton prefixes of uninstalled games (can hold saves) | no |
+| `cache` | Web, store and artwork caches, logs, crash dumps, shader caches of installed games | yes |
+| `partial` | Incomplete downloads (`steamapps/downloading`, `temp`) | no |
+| `proton` | Custom Proton builds in `compatibilitytools.d` (a game may still use one) | no |
+
+`a` only marks the types that are safe to regenerate or have no owner; recordings, prefixes, partial downloads and
+Proton builds are always marked by hand (they show in yellow). Non-Steam shortcut prefixes are never listed.
+If a library listed in `libraryfolders.vdf` is missing, for example an unmounted drive, leftover detection turns
+itself off with a warning, because that drive's games would otherwise look uninstalled.
+
+Every path is checked to sit inside Steam's folders before anything is deleted.
 
 ## What it deletes
 
@@ -85,7 +108,7 @@ For each marked game:
 2. `steamapps/appmanifest_<appid>.acf`, last, so a failed delete leaves the game visible to Steam instead of half gone.
 3. Only if you turn the option on: `compatdata/<appid>` (the Proton prefix, which can hold saves) and `shadercache/<appid>`.
 
-Deletion is permanent, not a move to the trash; the confirm screen says so and shows the space you will free.
+Games are removed as described above. Deletion is permanent, not a move to the trash; the confirm screen says so and shows the space you will free.
 Steam rewrites its library files while it is running, so close it first: press `c` on the confirm screen or
 start with `--close-steam` (polite shutdown, then terminate, then kill). If Steam will not close, nothing is deleted.
 

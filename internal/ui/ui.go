@@ -1,4 +1,4 @@
-// Package ui is the Bubble Tea front end: pick installed Steam games, bulk uninstall.
+// Package ui is the Bubble Tea front end: pick installed Steam games and Steam clutter, bulk delete.
 package ui
 
 import (
@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/ShatteredEagle/steamsweep/internal/clean"
 	"github.com/ShatteredEagle/steamsweep/internal/steam"
 )
 
@@ -22,7 +23,6 @@ var (
 	cText   = lipgloss.Color("#CDD6F4")
 	cMuted  = lipgloss.Color("#7F849C")
 	cFaint  = lipgloss.Color("#45475A")
-	cCursor = lipgloss.Color("#1E1E2E")
 
 	sTitle  = lipgloss.NewStyle().Bold(true).Foreground(cAccent)
 	sMuted  = lipgloss.NewStyle().Foreground(cMuted)
@@ -43,118 +43,160 @@ const (
 	modeDone
 )
 
-type sortMode int
+type tab int
 
 const (
-	sortSize sortMode = iota
+	tabGames tab = iota
+	tabClean
+)
+
+type sortKind int
+
+const (
+	sortSize sortKind = iota
 	sortPlayed
 	sortUpdated
 	sortName
-	numSortModes
+	sortKindTag
 )
 
-var sortLabels = [numSortModes]string{"size", "last played", "last updated", "name"}
+var sortLabels = map[sortKind]string{
+	sortSize: "size", sortPlayed: "last played", sortUpdated: "last updated", sortName: "name", sortKindTag: "type",
+}
 
-// less orders a before b in the mode's natural direction: biggest first, and for the date modes
-// oldest (or never) first, since those are the games you most likely want gone.
-func (md sortMode) less(a, b steam.Game) bool {
-	switch md {
+var sortCycles = [2][]sortKind{
+	tabGames: {sortSize, sortPlayed, sortUpdated, sortName},
+	tabClean: {sortSize, sortKindTag, sortName},
+}
+
+// entry is one selectable row: either an installed game or a cleanup item.
+type entry struct {
+	key, name, tag  string
+	size            int64
+	played, updated int64
+	tool, safe      bool
+	game            *steam.Game
+	item            *clean.Item
+}
+
+// less orders a before b in the kind's natural direction: biggest first, and for dates oldest
+// (or never) first, since those are the entries you most likely want gone.
+func (k sortKind) less(a, b entry) bool {
+	switch k {
 	case sortPlayed:
-		if a.LastPlayed != b.LastPlayed {
-			return a.LastPlayed < b.LastPlayed
+		if a.played != b.played {
+			return a.played < b.played
 		}
 	case sortUpdated:
-		if a.LastUpdated != b.LastUpdated {
-			return a.LastUpdated < b.LastUpdated
+		if a.updated != b.updated {
+			return a.updated < b.updated
+		}
+	case sortKindTag:
+		if a.tag != b.tag {
+			return a.tag < b.tag
 		}
 	case sortName:
-		la, lb := strings.ToLower(a.Name), strings.ToLower(b.Name)
-		if la != lb {
-			return la < lb
-		}
-		return false
+		return strings.ToLower(a.name) < strings.ToLower(b.name)
 	}
-	return a.Size > b.Size
+	return a.size > b.size
 }
 
 type deletedMsg struct{ err error }
 type closedMsg struct{ err error }
+type scannedMsg struct{ res clean.Result }
 
 // Options configures a UI session.
 type Options struct {
 	DryRun       bool
 	SteamRunning bool
 	Version      string
-	CloseSteam   bool // close Steam automatically before uninstalling
+	CloseSteam   bool // close Steam automatically before deleting
+	Root         string
+	Libs         []string
 }
 
 type model struct {
-	opts      Options
-	all       []steam.Game
-	multiLib  bool
-	view      []int // indices into all, after filter/tools
-	cursor    int
-	offset    int
-	selected  map[string]bool
-	w, h      int
-	mode      mode
-	filter    string
+	opts     Options
+	tabs     [2][]entry
+	multiLib bool
+	tab      tab
+	view     []entry
+	cursor   int
+	offset   int
+	selected map[string]bool
+	w, h     int
+	mode     mode
+	filter   string
+
 	showTools bool
-	sortMode  sortMode
-	reverse   bool
+	sortIdx   [2]int
+	reverse   [2]bool
 	prefix    bool
+
+	scanning, scanned bool
+	warnings          []string
 
 	closing  bool
 	closeErr string
-	queue    []steam.Game
+	queue    []entry
 	qIdx     int
 	freed    int64
 	failed   []string
 }
 
-func key(g steam.Game) string { return g.Library + "\x00" + g.AppID }
-
 // Run starts the TUI.
 func Run(games []steam.Game, o Options) error {
-	libs := map[string]bool{}
-	for _, g := range games {
-		libs[g.Library] = true
-	}
-	m := &model{opts: o, all: games, multiLib: len(libs) > 1, selected: map[string]bool{}, w: 80, h: 24}
-	m.rebuild()
-	_, err := tea.NewProgram(m).Run()
+	_, err := tea.NewProgram(newModel(games, o)).Run()
 	return err
+}
+
+func newModel(games []steam.Game, o Options) *model {
+	libs := map[string]bool{}
+	m := &model{opts: o, selected: map[string]bool{}, w: 80, h: 24}
+	for i := range games {
+		g := &games[i]
+		libs[g.Library] = true
+		m.tabs[tabGames] = append(m.tabs[tabGames], entry{
+			key: g.Library + "\x00" + g.AppID, name: g.Name, size: g.Size, played: g.LastPlayed,
+			updated: g.LastUpdated, tool: g.Tool, safe: true, game: g,
+		})
+	}
+	m.multiLib = len(libs) > 1
+	m.rebuild()
+	return m
 }
 
 func (m *model) Init() tea.Cmd { return nil }
 
+func (m *model) kind() sortKind { return sortCycles[m.tab][m.sortIdx[m.tab]%len(sortCycles[m.tab])] }
+
 func (m *model) rebuild() {
 	var cur string
 	if m.cursor < len(m.view) {
-		cur = key(m.all[m.view[m.cursor]])
+		cur = m.view[m.cursor].key
 	}
-	order := make([]int, 0, len(m.all))
 	q := strings.ToLower(m.filter)
-	for i, g := range m.all {
-		if g.Tool && !m.showTools {
+	view := make([]entry, 0, len(m.tabs[m.tab]))
+	for _, e := range m.tabs[m.tab] {
+		if m.tab == tabGames && e.tool && !m.showTools {
 			continue
 		}
-		if q != "" && !strings.Contains(strings.ToLower(g.Name), q) {
+		if q != "" && !strings.Contains(strings.ToLower(e.name), q) {
 			continue
 		}
-		order = append(order, i)
+		view = append(view, e)
 	}
-	sort.SliceStable(order, func(a, b int) bool {
-		ga, gb := m.all[order[a]], m.all[order[b]]
-		if m.reverse {
-			return m.sortMode.less(gb, ga)
+	k, rev := m.kind(), m.reverse[m.tab]
+	sort.SliceStable(view, func(i, j int) bool {
+		if rev {
+			return k.less(view[j], view[i])
 		}
-		return m.sortMode.less(ga, gb)
+		return k.less(view[i], view[j])
 	})
-	m.view = order
+	m.view = view
 	m.cursor = 0
-	for i, idx := range m.view {
-		if key(m.all[idx]) == cur {
+	for i, e := range m.view {
+		if e.key == cur {
 			m.cursor = i
 		}
 	}
@@ -162,7 +204,7 @@ func (m *model) rebuild() {
 }
 
 func (m *model) rows() int {
-	if r := m.h - 6; r > 3 {
+	if r := m.h - 7; r > 3 {
 		return r
 	}
 	return 3
@@ -187,22 +229,42 @@ func (m *model) clamp() {
 	}
 }
 
-func (m *model) selectedGames() []steam.Game {
-	var out []steam.Game
-	for _, g := range m.all {
-		if m.selected[key(g)] {
-			out = append(out, g)
+func (m *model) selectedEntries() []entry {
+	var out []entry
+	for t := range m.tabs {
+		for _, e := range m.tabs[t] {
+			if m.selected[e.key] {
+				out = append(out, e)
+			}
 		}
 	}
 	return out
 }
 
 func (m *model) selectedSize() (n int, size int64) {
-	for _, g := range m.selectedGames() {
+	for _, e := range m.selectedEntries() {
 		n++
-		size += g.Size
+		size += e.size
 	}
 	return
+}
+
+func (m *model) countSelected(t tab) (n int) {
+	for _, e := range m.tabs[t] {
+		if m.selected[e.key] {
+			n++
+		}
+	}
+	return
+}
+
+func (m *model) scanCmd() tea.Cmd {
+	var games []steam.Game
+	for _, e := range m.tabs[tabGames] {
+		games = append(games, *e.game)
+	}
+	root, libs := m.opts.Root, m.opts.Libs
+	return func() tea.Msg { return scannedMsg{clean.Scan(root, libs, games)} }
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -210,6 +272,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 		m.clamp()
+	case scannedMsg:
+		m.scanning, m.scanned = false, true
+		m.warnings = msg.res.Warnings
+		for i := range msg.res.Items {
+			it := &msg.res.Items[i]
+			m.tabs[tabClean] = append(m.tabs[tabClean], entry{key: "clean\x00" + it.Key, name: it.Name,
+				size: it.Size, tag: string(it.Kind), safe: it.Safe, item: it})
+		}
+		m.rebuild()
 	case closedMsg:
 		m.closing = false
 		m.opts.SteamRunning = steam.Running()
@@ -220,21 +291,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.closeErr = ""
 		if m.mode == modeDeleting {
-			return m, m.uninstallCmd()
+			return m, m.runCmd()
 		}
 	case deletedMsg:
-		g := m.queue[m.qIdx]
+		e := m.queue[m.qIdx]
 		if msg.err != nil {
-			m.failed = append(m.failed, fmt.Sprintf("%s: %v", g.Name, msg.err))
+			m.failed = append(m.failed, fmt.Sprintf("%s: %v", e.name, msg.err))
 		} else {
-			m.freed += g.Size
+			m.freed += e.size
 		}
 		m.qIdx++
 		if m.qIdx >= len(m.queue) {
 			m.mode = modeDone
 			return m, nil
 		}
-		return m, m.uninstallCmd()
+		return m, m.runCmd()
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
@@ -253,6 +324,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *model) switchTab() tea.Cmd {
+	m.tab = 1 - m.tab
+	m.filter, m.cursor, m.offset = "", 0, 0
+	m.rebuild()
+	if m.tab == tabClean && !m.scanned && !m.scanning {
+		m.scanning = true
+		return m.scanCmd()
+	}
+	return nil
+}
+
 func (m *model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	page := m.rows() - 1
 	switch msg.String() {
@@ -263,6 +345,8 @@ func (m *model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, tea.Quit
+	case "tab":
+		return m, m.switchTab()
 	case "up", "k":
 		m.cursor--
 	case "down", "j":
@@ -277,41 +361,43 @@ func (m *model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.cursor = len(m.view) - 1
 	case "space", " ", "x":
 		if len(m.view) > 0 {
-			k := key(m.all[m.view[m.cursor]])
+			k := m.view[m.cursor].key
 			m.selected[k] = !m.selected[k]
 			m.cursor++
 		}
 	case "a":
+		// "all" skips entries that may hold personal data or progress (recordings, prefixes, Proton builds).
 		allOn := true
-		for _, idx := range m.view {
-			if !m.selected[key(m.all[idx])] {
+		for _, e := range m.view {
+			if e.safe && !m.selected[e.key] {
 				allOn = false
 				break
 			}
 		}
-		for _, idx := range m.view {
-			m.selected[key(m.all[idx])] = !allOn
+		for _, e := range m.view {
+			if e.safe {
+				m.selected[e.key] = !allOn
+			}
 		}
 	case "i":
-		for _, idx := range m.view {
-			k := key(m.all[idx])
-			m.selected[k] = !m.selected[k]
+		for _, e := range m.view {
+			m.selected[e.key] = !m.selected[e.key]
 		}
 	case "c":
 		m.selected = map[string]bool{}
 	case "/":
 		m.mode = modeFilter
 	case "s":
-		m.sortMode = (m.sortMode + 1) % numSortModes
+		m.sortIdx[m.tab] = (m.sortIdx[m.tab] + 1) % len(sortCycles[m.tab])
 		m.rebuild()
 	case "r":
-		m.reverse = !m.reverse
+		m.reverse[m.tab] = !m.reverse[m.tab]
 		m.rebuild()
 	case "t":
-		m.showTools = !m.showTools
-		m.rebuild()
-	case "p":
-		m.prefix = !m.prefix
+		if m.tab == tabGames {
+			m.showTools = !m.showTools
+			m.rebuild()
+		}
 	case "enter":
 		if n, _ := m.selectedSize(); n > 0 {
 			m.mode = modeConfirm
@@ -354,14 +440,14 @@ func (m *model) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	switch msg.String() {
 	case "y", "enter":
-		m.queue = m.selectedGames()
+		m.queue = m.selectedEntries()
 		m.qIdx, m.freed, m.failed = 0, 0, nil
 		m.mode = modeDeleting
 		if m.opts.SteamRunning && m.opts.CloseSteam {
 			m.closing = true
 			return m, closeCmd()
 		}
-		return m, m.uninstallCmd()
+		return m, m.runCmd()
 	case "c":
 		if m.opts.SteamRunning {
 			m.closing, m.closeErr = true, ""
@@ -379,9 +465,15 @@ func closeCmd() tea.Cmd {
 	return func() tea.Msg { return closedMsg{steam.Close()} }
 }
 
-func (m *model) uninstallCmd() tea.Cmd {
-	g, o := m.queue[m.qIdx], steam.UninstallOpts{Prefix: m.prefix, DryRun: m.opts.DryRun}
-	return func() tea.Msg { return deletedMsg{steam.Uninstall(g, o)} }
+func (m *model) runCmd() tea.Cmd {
+	e, o := m.queue[m.qIdx], m.opts
+	prefix := m.prefix
+	return func() tea.Msg {
+		if e.game != nil {
+			return deletedMsg{steam.Uninstall(*e.game, steam.UninstallOpts{Prefix: prefix, DryRun: o.DryRun})}
+		}
+		return deletedMsg{clean.Remove(*e.item, o.Root, o.Libs, o.DryRun)}
+	}
 }
 
 func humanSize(b int64) string {
@@ -432,6 +524,68 @@ func (m *model) View() tea.View {
 	return v
 }
 
+func ago(unix int64, now time.Time) string {
+	if unix <= 0 {
+		return "never"
+	}
+	d := now.Sub(time.Unix(unix, 0))
+	switch {
+	case d < 24*time.Hour:
+		return "today"
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	case d < 365*24*time.Hour:
+		return fmt.Sprintf("%dmo ago", int(d.Hours()/24/30))
+	}
+	return fmt.Sprintf("%dy ago", int(d.Hours()/24/365))
+}
+
+func (m *model) sortSummary() string {
+	arrow := "↑" // oldest / A-Z first
+	if m.kind() == sortSize {
+		arrow = "↓" // biggest first
+	}
+	if m.reverse[m.tab] {
+		arrow = map[string]string{"↑": "↓", "↓": "↑"}[arrow]
+	}
+	return "sort: " + sortLabels[m.kind()] + " " + arrow
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return "game"
+	}
+	return "games"
+}
+
+func shortLib(p string) string {
+	parts := strings.Split(strings.ReplaceAll(p, `\`, "/"), "/")
+	return parts[len(parts)-1]
+}
+
+func help(items [][2]string) string {
+	parts := make([]string, len(items))
+	for i, it := range items {
+		parts[i] = sKey.Render(it[0]) + " " + sMuted.Render(it[1])
+	}
+	return strings.Join(parts, sFaint.Render(" · "))
+}
+
+func (m *model) tabBar() string {
+	label := func(t tab, name string, n int) string {
+		badge := ""
+		if n > 0 {
+			badge = sDanger.Render(fmt.Sprintf(" ●%d", n))
+		}
+		if m.tab == t {
+			pill := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#1E1E2E")).Background(cAccent).Padding(0, 1)
+			return pill.Render(name) + badge
+		}
+		return sMuted.Render(" "+name) + badge
+	}
+	return label(tabGames, "Games", m.countSelected(tabGames)) + "  " + label(tabClean, "Cleanup", m.countSelected(tabClean))
+}
+
 func (m *model) viewList() string {
 	var b strings.Builder
 	n, size := m.selectedSize()
@@ -440,68 +594,91 @@ func (m *model) viewList() string {
 	if m.opts.DryRun {
 		title += " " + sWarn.Render("[dry run]")
 	}
-	count := sMuted.Render(fmt.Sprintf("%d %s · %s", len(m.view), plural(len(m.view)), m.sortSummary()))
-	b.WriteString(title + "  " + count + "\n")
+	b.WriteString(title + "   " + m.tabBar() + "\n")
+	count := fmt.Sprintf("%d %s", len(m.view), plural(len(m.view)))
+	if m.tab == tabClean {
+		count = fmt.Sprintf("%d items", len(m.view))
+	}
+	info := sMuted.Render(count + " · " + m.sortSummary())
 	switch {
 	case m.mode == modeFilter:
-		b.WriteString(sKey.Render("/") + m.filter + sKey.Render("▏") + "\n\n")
+		b.WriteString(sKey.Render("/") + m.filter + sKey.Render("▏") + "\n")
 	case m.filter != "":
-		b.WriteString(sMuted.Render("filter: ") + m.filter + sMuted.Render("  (esc clears)") + "\n\n")
+		b.WriteString(info + sMuted.Render("   filter: ") + m.filter + sMuted.Render(" (esc clears)") + "\n")
 	default:
-		b.WriteString(sMuted.Render("Mark games, then press enter to uninstall them.") + "\n\n")
+		b.WriteString(info + "\n")
 	}
+	b.WriteString("\n")
 
 	var maxSize int64 = 1
-	for _, idx := range m.view {
-		if sz := m.all[idx].Size; sz > maxSize {
-			maxSize = sz
+	for _, e := range m.view {
+		if e.size > maxSize {
+			maxSize = e.size
 		}
 	}
 
-	const barW, sizeW, playW = 12, 10, 10
-	now := time.Now()
+	const barW, sizeW, metaW = 12, 10, 10
 	libW := 0
-	if m.multiLib {
+	if m.multiLib && m.tab == tabGames {
 		libW = 14
 	}
-	nameW := m.w - (4 + 2 + barW + 2 + sizeW + 2 + playW + 1) - libW
+	nameW := m.w - (4 + 2 + barW + 2 + sizeW + 2 + metaW + 1) - libW
 	if nameW < 10 {
 		nameW = 10
 	}
 
-	if len(m.view) == 0 {
+	printed := 0
+	switch {
+	case m.tab == tabClean && m.scanning:
+		b.WriteString(sMuted.Render("  Scanning Steam folders…") + "\n")
+		printed++
+	case len(m.view) == 0 && m.tab == tabClean && m.scanned:
+		b.WriteString(sMuted.Render("  Nothing to clean up.") + "\n")
+		printed++
+	case len(m.view) == 0:
 		b.WriteString(sMuted.Render("  No games match.") + "\n")
+		printed++
 	}
 	end := m.offset + m.rows()
 	if end > len(m.view) {
 		end = len(m.view)
 	}
-	printed := 0
+	now := time.Now()
 	for i := m.offset; i < end; i++ {
-		g := m.all[m.view[i]]
-		on := m.selected[key(g)]
+		e := m.view[i]
+		on := m.selected[e.key]
 		here := i == m.cursor
 
 		mark := sFaint.Render("○")
-		name := lipgloss.NewStyle().Foreground(cText).Render(fit(g.Name, nameW))
-		sz := sMuted.Render(fmt.Sprintf("%*s", sizeW, humanSize(g.Size)))
+		name := lipgloss.NewStyle().Foreground(cText).Render(fit(e.name, nameW))
+		sz := sMuted.Render(fmt.Sprintf("%*s", sizeW, humanSize(e.size)))
 		if on {
 			mark = sDanger.Render("●")
-			name = lipgloss.NewStyle().Foreground(cDanger).Render(fit(g.Name, nameW))
-			sz = sDanger.Render(fmt.Sprintf("%*s", sizeW, humanSize(g.Size)))
+			name = lipgloss.NewStyle().Foreground(cDanger).Render(fit(e.name, nameW))
+			sz = sDanger.Render(fmt.Sprintf("%*s", sizeW, humanSize(e.size)))
 		}
 		pointer := "  "
 		if here {
 			pointer = sKey.Render("▌ ")
 			name = lipgloss.NewStyle().Bold(true).Render(name)
 		}
-		played := sFaint.Render(fmt.Sprintf("%*s", playW, ago(g.LastPlayed, now)))
-		if g.LastPlayed > 0 {
-			played = sMuted.Render(fmt.Sprintf("%*s", playW, ago(g.LastPlayed, now)))
+		var meta string
+		if e.game != nil {
+			style := sMuted
+			if e.played <= 0 {
+				style = sFaint
+			}
+			meta = style.Render(fmt.Sprintf("%*s", metaW, ago(e.played, now)))
+		} else {
+			style := sMuted
+			if !e.safe {
+				style = sWarn // may hold personal data or progress; skipped by "mark all"
+			}
+			meta = style.Render(fmt.Sprintf("%*s", metaW, e.tag))
 		}
-		line := pointer + mark + " " + name + "  " + bar(float64(g.Size)/float64(maxSize), barW) + "  " + sz + "  " + played
-		if m.multiLib {
-			line += " " + sFaint.Render(fit(shortLib(g.Library), libW-1))
+		line := pointer + mark + " " + name + "  " + bar(float64(e.size)/float64(maxSize), barW) + "  " + sz + "  " + meta
+		if libW > 0 && e.game != nil {
+			line += " " + sFaint.Render(fit(shortLib(e.game.Library), libW-1))
 		}
 		if here {
 			line = lipgloss.NewStyle().Background(lipgloss.Color("#313244")).Width(m.w).Render(line)
@@ -521,50 +698,21 @@ func (m *model) viewList() string {
 	if m.opts.SteamRunning {
 		status += "   " + sWarn.Render("⚠ Steam is running")
 	}
-	b.WriteString(status + "\n")
-	b.WriteString(help([][2]string{{"↑↓", "move"}, {"space", "mark"}, {"a", "all"}, {"i", "invert"}, {"/", "filter"},
-		{"s", "sort"}, {"r", "reverse"}, {"t", "tools"}, {"enter", "uninstall"}, {"q", "quit"}}))
+	if m.tab == tabClean && len(m.warnings) > 0 {
+		status += "   " + sWarn.Render("⚠ "+m.warnings[0])
+	}
+	b.WriteString(ansi.Truncate(status, m.w, "…") + "\n")
+	other := "cleanup"
+	if m.tab == tabClean {
+		other = "games"
+	}
+	keys := [][2]string{{"↑↓", "move"}, {"space", "mark"}, {"a", "all"}, {"/", "filter"}, {"s", "sort"}, {"r", "reverse"}, {"tab", other}}
+	if m.tab == tabGames {
+		keys = append(keys, [2]string{"t", "tools"})
+	}
+	keys = append(keys, [2]string{"enter", "delete"}, [2]string{"q", "quit"})
+	b.WriteString(help(keys))
 	return b.String()
-}
-
-func ago(unix int64, now time.Time) string {
-	if unix <= 0 {
-		return "never"
-	}
-	d := now.Sub(time.Unix(unix, 0))
-	switch {
-	case d < 24*time.Hour:
-		return "today"
-	case d < 30*24*time.Hour:
-		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
-	case d < 365*24*time.Hour:
-		return fmt.Sprintf("%dmo ago", int(d.Hours()/24/30))
-	}
-	return fmt.Sprintf("%dy ago", int(d.Hours()/24/365))
-}
-
-func (m *model) sortSummary() string {
-	arrow := "↑" // oldest / A-Z first
-	if m.sortMode == sortSize {
-		arrow = "↓" // biggest first
-	}
-	if m.reverse {
-		arrow = map[string]string{"↑": "↓", "↓": "↑"}[arrow]
-	}
-	return "sort: " + sortLabels[m.sortMode] + " " + arrow
-}
-
-func shortLib(p string) string {
-	parts := strings.Split(strings.ReplaceAll(p, `\`, "/"), "/")
-	return parts[len(parts)-1]
-}
-
-func help(items [][2]string) string {
-	parts := make([]string, len(items))
-	for i, it := range items {
-		parts[i] = sKey.Render(it[0]) + " " + sMuted.Render(it[1])
-	}
-	return strings.Join(parts, sFaint.Render(" · "))
 }
 
 func (m *model) box(content string) string {
@@ -579,24 +727,50 @@ func (m *model) box(content string) string {
 	return lipgloss.Place(m.w, m.h, lipgloss.Center, lipgloss.Center, box)
 }
 
-func (m *model) viewConfirm() string {
-	games := m.selectedGames()
-	_, size := m.selectedSize()
-	var b strings.Builder
-	b.WriteString(sDanger.Render(fmt.Sprintf("Uninstall %d %s?", len(games), plural(len(games)))) + "\n")
-	b.WriteString(sMuted.Render("Frees ") + sOK.Render(humanSize(size)) + sMuted.Render(". This deletes the files; it cannot be undone.") + "\n\n")
-	for i, g := range games {
-		if i == 8 {
-			b.WriteString(sMuted.Render(fmt.Sprintf("  … and %d more\n", len(games)-8)))
-			break
+func (m *model) summary(entries []entry) string {
+	var games, items int
+	for _, e := range entries {
+		if e.game != nil {
+			games++
+		} else {
+			items++
 		}
-		b.WriteString("  " + fit(g.Name, 40) + sMuted.Render(fmt.Sprintf("%10s", humanSize(g.Size))) + "\n")
 	}
-	pfx := sFaint.Render("○") + sMuted.Render(" keep Proton prefix (saves)")
-	if m.prefix {
-		pfx = sDanger.Render("●") + " also delete Proton prefix and shader cache"
+	var parts []string
+	if games > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s", games, plural(games)))
 	}
-	b.WriteString("\n" + pfx + "\n")
+	if items > 0 {
+		parts = append(parts, fmt.Sprintf("%d cleanup %s", items, map[bool]string{true: "item", false: "items"}[items == 1]))
+	}
+	return strings.Join(parts, " and ")
+}
+
+func (m *model) viewConfirm() string {
+	entries := m.selectedEntries()
+	_, size := m.selectedSize()
+	hasGame := false
+	var b strings.Builder
+	b.WriteString(sDanger.Render("Delete "+m.summary(entries)+"?") + "\n")
+	b.WriteString(sMuted.Render("Frees ") + sOK.Render(humanSize(size)) + sMuted.Render(". This deletes the files; it cannot be undone.") + "\n\n")
+	for i, e := range entries {
+		if e.game != nil {
+			hasGame = true
+		}
+		if i < 8 {
+			b.WriteString("  " + fit(e.name, 40) + sMuted.Render(fmt.Sprintf("%10s", humanSize(e.size))) + "\n")
+		}
+	}
+	if len(entries) > 8 {
+		b.WriteString(sMuted.Render(fmt.Sprintf("  … and %d more\n", len(entries)-8)))
+	}
+	if hasGame {
+		pfx := sFaint.Render("○") + sMuted.Render(" keep Proton prefix (saves)")
+		if m.prefix {
+			pfx = sDanger.Render("●") + " also delete Proton prefix and shader cache"
+		}
+		b.WriteString("\n" + pfx + "\n")
+	}
 	switch {
 	case m.closing:
 		b.WriteString("\n" + sWarn.Render("Closing Steam…") + "\n")
@@ -611,10 +785,14 @@ func (m *model) viewConfirm() string {
 	if m.opts.DryRun {
 		b.WriteString("\n" + sWarn.Render("dry run: nothing will be deleted") + "\n")
 	}
-	keys := [][2]string{{"y", "uninstall"}, {"p", "prefix"}, {"esc", "cancel"}}
-	if m.opts.SteamRunning {
-		keys = append(keys[:2], [2]string{"c", "close Steam"}, keys[2])
+	keys := [][2]string{{"y", "delete"}}
+	if hasGame {
+		keys = append(keys, [2]string{"p", "prefix"})
 	}
+	if m.opts.SteamRunning {
+		keys = append(keys, [2]string{"c", "close Steam"})
+	}
+	keys = append(keys, [2]string{"esc", "cancel"})
 	b.WriteString("\n" + help(keys))
 	return m.box(b.String())
 }
@@ -624,7 +802,7 @@ func (m *model) viewProgress() string {
 	var b strings.Builder
 	if m.mode == modeDone {
 		b.WriteString(sOK.Render("Done") + "\n\n")
-		b.WriteString(fmt.Sprintf("Uninstalled %d of %d %s, freed %s.\n", total-len(m.failed), total, plural(total), sOK.Render(humanSize(m.freed))))
+		b.WriteString(fmt.Sprintf("Deleted %d of %d, freed %s.\n", total-len(m.failed), total, sOK.Render(humanSize(m.freed))))
 		for _, f := range m.failed {
 			b.WriteString(sDanger.Render("✗ ") + f + "\n")
 		}
@@ -635,15 +813,8 @@ func (m *model) viewProgress() string {
 		b.WriteString(sTitle.Render("Closing Steam…") + "\n\n" + sMuted.Render("Waiting for the client to exit."))
 		return m.box(b.String())
 	}
-	b.WriteString(sTitle.Render("Uninstalling…") + "\n\n")
-	b.WriteString(fit(m.queue[m.qIdx].Name, 50) + "\n\n")
+	b.WriteString(sTitle.Render("Deleting…") + "\n\n")
+	b.WriteString(fit(m.queue[m.qIdx].name, 50) + "\n\n")
 	b.WriteString(bar(float64(m.qIdx)/float64(total), 40) + sMuted.Render(fmt.Sprintf("  %d/%d", m.qIdx, total)))
 	return m.box(b.String())
-}
-
-func plural(n int) string {
-	if n == 1 {
-		return "game"
-	}
-	return "games"
 }

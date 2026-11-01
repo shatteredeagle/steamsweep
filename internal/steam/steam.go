@@ -257,3 +257,27 @@ func ApplyLastPlayed(root string, games []Game) {
 		}
 	}
 }
+
+// MissingLibraries returns library paths that libraryfolders.vdf lists but that are not on disk
+// right now (typically an unmounted drive). Games installed there look uninstalled.
+func MissingLibraries(root string) []string {
+	m, err := parseVDF(filepath.Join(root, "steamapps", "libraryfolders.vdf"))
+	if err != nil {
+		return nil
+	}
+	var missing []string
+	for _, v := range asMap(m["libraryfolders"]) {
+		p := asStr(asMap(v)["path"])
+		if p == "" {
+			continue
+		}
+		if fi, err := os.Stat(filepath.Join(p, "steamapps")); err != nil || !fi.IsDir() {
+			missing = append(missing, p)
+		}
+	}
+	sort.Strings(missing)
+	return missing
+}
+
+// IsTool reports whether an appid is a known runtime/tool rather than a game.
+func IsToolAppID(appid string) bool { return toolAppIDs[appid] }

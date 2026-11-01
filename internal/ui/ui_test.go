@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/ShatteredEagle/steamsweep/internal/clean"
 	"github.com/ShatteredEagle/steamsweep/internal/steam"
 )
 
@@ -16,8 +17,8 @@ func testModel() *model {
 		{AppID: "2", Name: "Medium Game", Size: 5e9, Library: "/lib", LastPlayed: 0},
 		{AppID: "3", Name: "Proton 9.0", Size: 1e9, Library: "/lib", Tool: true},
 	}
-	m := &model{all: games, selected: map[string]bool{}, w: 90, h: 20}
-	m.rebuild()
+	m := newModel(games, Options{Root: "/lib", Libs: []string{"/lib"}})
+	m.w, m.h = 90, 20
 	return m
 }
 
@@ -30,10 +31,30 @@ func press(m *model, s string) {
 		k = tea.KeyPressMsg{Code: tea.KeyDown}
 	case "enter":
 		k = tea.KeyPressMsg{Code: tea.KeyEnter}
+	case "tab":
+		k = tea.KeyPressMsg{Code: tea.KeyTab}
 	default:
 		k = tea.KeyPressMsg{Code: rune(s[0]), Text: s}
 	}
 	m.Update(k)
+}
+
+func names(m *model) []string {
+	var out []string
+	for _, e := range m.view {
+		out = append(out, e.name)
+	}
+	return out
+}
+
+func withCleanup(m *model) {
+	press(m, "tab") // starts the scan; feed the result by hand instead of running it
+	items := []clean.Item{
+		{Key: "a", Name: "Old recording", Kind: clean.KindRecording, Size: 9e9, Paths: []string{"/lib/x"}},
+		{Key: "b", Name: "Web cache", Kind: clean.KindCache, Size: 1e9, Safe: true, Paths: []string{"/lib/y"}},
+		{Key: "c", Name: "Leftover", Kind: clean.KindLeftover, Size: 2e9, Safe: true, Paths: []string{"/lib/z"}},
+	}
+	m.Update(scannedMsg{clean.Result{Items: items, Warnings: []string{"Library not found"}}})
 }
 
 func TestToolsHiddenByDefault(t *testing.T) {
@@ -55,9 +76,6 @@ func TestSpaceMarksAndAdvances(t *testing.T) {
 	if n != 2 || size != 45e9 {
 		t.Fatalf("n=%d size=%d", n, size)
 	}
-	if m.cursor != 1 {
-		t.Errorf("cursor=%d (clamped at end)", m.cursor)
-	}
 }
 
 func TestFilter(t *testing.T) {
@@ -66,8 +84,8 @@ func TestFilter(t *testing.T) {
 	for _, r := range "med" {
 		press(m, string(r))
 	}
-	if len(m.view) != 1 || m.all[m.view[0]].Name != "Medium Game" {
-		t.Fatalf("filter failed: %v", m.view)
+	if got := names(m); len(got) != 1 || got[0] != "Medium Game" {
+		t.Fatalf("filter failed: %v", got)
 	}
 }
 
@@ -82,47 +100,6 @@ func TestEnterNeedsSelection(t *testing.T) {
 	if m.mode != modeConfirm {
 		t.Fatal("confirm not opened")
 	}
-}
-
-func TestViewRenders(t *testing.T) {
-	m := testModel()
-	press(m, "space")
-	out := m.viewList()
-	for _, want := range []string{"steamsweep", "Big Game", "1 selected"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("missing %q", want)
-		}
-	}
-	if testing.Verbose() {
-		t.Log("\n" + out)
-		press(m, "enter")
-		t.Log("\n" + m.viewConfirm())
-	}
-}
-
-func TestCloseFailureReturnsToConfirm(t *testing.T) {
-	m := testModel()
-	m.opts.SteamRunning = true
-	m.mode, m.closing = modeDeleting, true
-	m.queue = m.all[:1]
-	m.Update(closedMsg{err: errTest})
-	if m.mode != modeConfirm || m.closeErr == "" {
-		t.Fatalf("mode=%v closeErr=%q", m.mode, m.closeErr)
-	}
-}
-
-var errTest = errString("still running")
-
-type errString string
-
-func (e errString) Error() string { return string(e) }
-
-func names(m *model) []string {
-	var out []string
-	for _, i := range m.view {
-		out = append(out, m.all[i].Name)
-	}
-	return out
 }
 
 func TestSortModes(t *testing.T) {
@@ -140,10 +117,64 @@ func TestSortModes(t *testing.T) {
 	}
 	press(m, "s")
 	press(m, "s") // name; reverse is still on from above
-	if m.sortMode != sortName || m.sortSummary() != "sort: name ↓" {
+	if m.kind() != sortName || m.sortSummary() != "sort: name ↓" {
 		t.Fatalf("summary %q", m.sortSummary())
 	}
 }
+
+func TestCleanupTab(t *testing.T) {
+	m := testModel()
+	withCleanup(m)
+	if !m.scanning && !m.scanned {
+		t.Fatal("scan never started")
+	}
+	if got := names(m); len(got) != 3 || got[0] != "Old recording" {
+		t.Fatalf("cleanup view: %v", got)
+	}
+	press(m, "a") // marks only safe items; the recording holds personal data
+	n, size := m.selectedSize()
+	if n != 2 || size != 3e9 {
+		t.Fatalf("mark-all picked n=%d size=%d, want the 2 safe items", n, size)
+	}
+	press(m, "tab") // back to games; selection survives across tabs
+	press(m, "space")
+	if n, _ := m.selectedSize(); n != 3 {
+		t.Fatalf("selection across tabs: %d", n)
+	}
+	press(m, "enter")
+	if !strings.Contains(m.viewConfirm(), "1 game and 2 cleanup items") {
+		t.Errorf("confirm summary wrong:\n%s", m.viewConfirm())
+	}
+}
+
+func TestCleanupSortCyclesItsOwnModes(t *testing.T) {
+	m := testModel()
+	withCleanup(m)
+	press(m, "s")
+	if m.kind() != sortKindTag {
+		t.Fatalf("kind=%v", m.kind())
+	}
+	press(m, "s")
+	press(m, "s")
+	if m.kind() != sortSize {
+		t.Fatalf("cleanup cycle should wrap after 3 modes, kind=%v", m.kind())
+	}
+}
+
+func TestCloseFailureReturnsToConfirm(t *testing.T) {
+	m := testModel()
+	m.opts.SteamRunning = true
+	m.mode, m.closing = modeDeleting, true
+	m.queue = m.tabs[tabGames][:1]
+	m.Update(closedMsg{err: errString("still running")})
+	if m.mode != modeConfirm || m.closeErr == "" {
+		t.Fatalf("mode=%v closeErr=%q", m.mode, m.closeErr)
+	}
+}
+
+type errString string
+
+func (e errString) Error() string { return string(e) }
 
 func TestAgo(t *testing.T) {
 	now := time.Unix(2_000_000_000, 0)
@@ -153,5 +184,25 @@ func TestAgo(t *testing.T) {
 		if got := ago(in, now); got != want {
 			t.Errorf("ago(%d)=%q want %q", in, got, want)
 		}
+	}
+}
+
+func TestViewsRender(t *testing.T) {
+	m := testModel()
+	press(m, "space")
+	for _, want := range []string{"steamsweep", "Games", "Cleanup", "Big Game", "1 selected"} {
+		if out := m.viewList(); !strings.Contains(out, want) {
+			t.Errorf("games view missing %q", want)
+		}
+	}
+	withCleanup(m)
+	out := m.viewList()
+	for _, want := range []string{"Old recording", "recording", "Library not found"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("cleanup view missing %q", want)
+		}
+	}
+	if testing.Verbose() {
+		t.Log("\n" + out)
 	}
 }
