@@ -10,7 +10,7 @@ Linux first; also builds for macOS and Windows (path detection included, less te
 go install steamsweep@latest   # needs Go 1.25+; replace with the module path once published
 ```
 
-or grab a binary from the releases page (built with GoReleaser: `goreleaser release --clean`), or build locally:
+or grab a binary from the releases page (tag `vX.Y.Z` and CI builds Linux, macOS and Windows archives; `scripts/build-release.sh X.Y.Z` does the same locally), or build locally:
 
 ```sh
 go build -o steamsweep . && install -m755 steamsweep ~/.local/bin/
@@ -32,7 +32,7 @@ steamsweep --steam-root /path/to/Steam
 | `space` | mark / unmark, then move down |
 | `a` / `i` / `c` | mark all shown / invert / clear |
 | `/` | filter by name (`esc` clears) |
-| `s` | sort by size / name |
+| `s` / `r` | cycle sort: size, last played, last updated, name / reverse it |
 | `t` | show Proton and runtime tools (hidden by default) |
 | `enter` | review and uninstall |
 

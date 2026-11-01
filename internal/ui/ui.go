@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -42,6 +43,40 @@ const (
 	modeDone
 )
 
+type sortMode int
+
+const (
+	sortSize sortMode = iota
+	sortPlayed
+	sortUpdated
+	sortName
+	numSortModes
+)
+
+var sortLabels = [numSortModes]string{"size", "last played", "last updated", "name"}
+
+// less orders a before b in the mode's natural direction: biggest first, and for the date modes
+// oldest (or never) first, since those are the games you most likely want gone.
+func (md sortMode) less(a, b steam.Game) bool {
+	switch md {
+	case sortPlayed:
+		if a.LastPlayed != b.LastPlayed {
+			return a.LastPlayed < b.LastPlayed
+		}
+	case sortUpdated:
+		if a.LastUpdated != b.LastUpdated {
+			return a.LastUpdated < b.LastUpdated
+		}
+	case sortName:
+		la, lb := strings.ToLower(a.Name), strings.ToLower(b.Name)
+		if la != lb {
+			return la < lb
+		}
+		return false
+	}
+	return a.Size > b.Size
+}
+
 type deletedMsg struct{ err error }
 type closedMsg struct{ err error }
 
@@ -65,7 +100,8 @@ type model struct {
 	mode      mode
 	filter    string
 	showTools bool
-	bySize    bool
+	sortMode  sortMode
+	reverse   bool
 	prefix    bool
 
 	closing  bool
@@ -84,7 +120,7 @@ func Run(games []steam.Game, o Options) error {
 	for _, g := range games {
 		libs[g.Library] = true
 	}
-	m := &model{opts: o, all: games, multiLib: len(libs) > 1, selected: map[string]bool{}, bySize: true, w: 80, h: 24}
+	m := &model{opts: o, all: games, multiLib: len(libs) > 1, selected: map[string]bool{}, w: 80, h: 24}
 	m.rebuild()
 	_, err := tea.NewProgram(m).Run()
 	return err
@@ -110,10 +146,10 @@ func (m *model) rebuild() {
 	}
 	sort.SliceStable(order, func(a, b int) bool {
 		ga, gb := m.all[order[a]], m.all[order[b]]
-		if m.bySize {
-			return ga.Size > gb.Size
+		if m.reverse {
+			return m.sortMode.less(gb, ga)
 		}
-		return strings.ToLower(ga.Name) < strings.ToLower(gb.Name)
+		return m.sortMode.less(ga, gb)
 	})
 	m.view = order
 	m.cursor = 0
@@ -266,7 +302,10 @@ func (m *model) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "/":
 		m.mode = modeFilter
 	case "s":
-		m.bySize = !m.bySize
+		m.sortMode = (m.sortMode + 1) % numSortModes
+		m.rebuild()
+	case "r":
+		m.reverse = !m.reverse
 		m.rebuild()
 	case "t":
 		m.showTools = !m.showTools
@@ -401,7 +440,7 @@ func (m *model) viewList() string {
 	if m.opts.DryRun {
 		title += " " + sWarn.Render("[dry run]")
 	}
-	count := sMuted.Render(fmt.Sprintf("%d %s", len(m.view), plural(len(m.view))))
+	count := sMuted.Render(fmt.Sprintf("%d %s · %s", len(m.view), plural(len(m.view)), m.sortSummary()))
 	b.WriteString(title + "  " + count + "\n")
 	switch {
 	case m.mode == modeFilter:
@@ -419,12 +458,13 @@ func (m *model) viewList() string {
 		}
 	}
 
-	const barW, sizeW = 12, 10
+	const barW, sizeW, playW = 12, 10, 10
+	now := time.Now()
 	libW := 0
 	if m.multiLib {
 		libW = 14
 	}
-	nameW := m.w - (4 + 2 + barW + 2 + sizeW + 1) - libW
+	nameW := m.w - (4 + 2 + barW + 2 + sizeW + 2 + playW + 1) - libW
 	if nameW < 10 {
 		nameW = 10
 	}
@@ -455,7 +495,11 @@ func (m *model) viewList() string {
 			pointer = sKey.Render("▌ ")
 			name = lipgloss.NewStyle().Bold(true).Render(name)
 		}
-		line := pointer + mark + " " + name + "  " + bar(float64(g.Size)/float64(maxSize), barW) + "  " + sz
+		played := sFaint.Render(fmt.Sprintf("%*s", playW, ago(g.LastPlayed, now)))
+		if g.LastPlayed > 0 {
+			played = sMuted.Render(fmt.Sprintf("%*s", playW, ago(g.LastPlayed, now)))
+		}
+		line := pointer + mark + " " + name + "  " + bar(float64(g.Size)/float64(maxSize), barW) + "  " + sz + "  " + played
 		if m.multiLib {
 			line += " " + sFaint.Render(fit(shortLib(g.Library), libW-1))
 		}
@@ -479,15 +523,35 @@ func (m *model) viewList() string {
 	}
 	b.WriteString(status + "\n")
 	b.WriteString(help([][2]string{{"↑↓", "move"}, {"space", "mark"}, {"a", "all"}, {"i", "invert"}, {"/", "filter"},
-		{"s", sortLabel(m.bySize)}, {"t", "tools"}, {"enter", "uninstall"}, {"q", "quit"}}))
+		{"s", "sort"}, {"r", "reverse"}, {"t", "tools"}, {"enter", "uninstall"}, {"q", "quit"}}))
 	return b.String()
 }
 
-func sortLabel(bySize bool) string {
-	if bySize {
-		return "sort: size"
+func ago(unix int64, now time.Time) string {
+	if unix <= 0 {
+		return "never"
 	}
-	return "sort: name"
+	d := now.Sub(time.Unix(unix, 0))
+	switch {
+	case d < 24*time.Hour:
+		return "today"
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	case d < 365*24*time.Hour:
+		return fmt.Sprintf("%dmo ago", int(d.Hours()/24/30))
+	}
+	return fmt.Sprintf("%dy ago", int(d.Hours()/24/365))
+}
+
+func (m *model) sortSummary() string {
+	arrow := "↑" // oldest / A-Z first
+	if m.sortMode == sortSize {
+		arrow = "↓" // biggest first
+	}
+	if m.reverse {
+		arrow = map[string]string{"↑": "↓", "↓": "↑"}[arrow]
+	}
+	return "sort: " + sortLabels[m.sortMode] + " " + arrow
 }
 
 func shortLib(p string) string {

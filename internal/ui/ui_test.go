@@ -3,6 +3,7 @@ package ui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -11,11 +12,11 @@ import (
 
 func testModel() *model {
 	games := []steam.Game{
-		{AppID: "1", Name: "Big Game", Size: 40e9, Library: "/lib"},
-		{AppID: "2", Name: "Medium Game", Size: 5e9, Library: "/lib"},
+		{AppID: "1", Name: "Big Game", Size: 40e9, Library: "/lib", LastPlayed: 1_700_000_000},
+		{AppID: "2", Name: "Medium Game", Size: 5e9, Library: "/lib", LastPlayed: 0},
 		{AppID: "3", Name: "Proton 9.0", Size: 1e9, Library: "/lib", Tool: true},
 	}
-	m := &model{all: games, selected: map[string]bool{}, bySize: true, w: 90, h: 20}
+	m := &model{all: games, selected: map[string]bool{}, w: 90, h: 20}
 	m.rebuild()
 	return m
 }
@@ -115,3 +116,42 @@ var errTest = errString("still running")
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+func names(m *model) []string {
+	var out []string
+	for _, i := range m.view {
+		out = append(out, m.all[i].Name)
+	}
+	return out
+}
+
+func TestSortModes(t *testing.T) {
+	m := testModel()
+	if got := names(m); got[0] != "Big Game" {
+		t.Fatalf("size sort: %v", got)
+	}
+	press(m, "s") // last played: never-played first
+	if got := names(m); got[0] != "Medium Game" {
+		t.Fatalf("played sort: %v", got)
+	}
+	press(m, "r")
+	if got := names(m); got[0] != "Big Game" {
+		t.Fatalf("reversed played sort: %v", got)
+	}
+	press(m, "s")
+	press(m, "s") // name; reverse is still on from above
+	if m.sortMode != sortName || m.sortSummary() != "sort: name ↓" {
+		t.Fatalf("summary %q", m.sortSummary())
+	}
+}
+
+func TestAgo(t *testing.T) {
+	now := time.Unix(2_000_000_000, 0)
+	cases := map[int64]string{0: "never", 2_000_000_000 - 3600: "today", 2_000_000_000 - 5*86400: "5d ago",
+		2_000_000_000 - 90*86400: "3mo ago", 2_000_000_000 - 800*86400: "2y ago"}
+	for in, want := range cases {
+		if got := ago(in, now); got != want {
+			t.Errorf("ago(%d)=%q want %q", in, got, want)
+		}
+	}
+}

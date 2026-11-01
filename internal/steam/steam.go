@@ -17,12 +17,14 @@ import (
 
 // Game is one installed Steam app, read from an appmanifest_*.acf file.
 type Game struct {
-	AppID      string
-	Name       string
-	InstallDir string
-	Size       int64  // SizeOnDisk from the manifest, bytes
-	Library    string // library root (contains steamapps/)
-	Tool       bool   // Proton, Steam Linux Runtime, redistributables
+	AppID       string
+	Name        string
+	InstallDir  string
+	Size        int64  // SizeOnDisk from the manifest, bytes
+	LastPlayed  int64  // unix seconds, 0 = never
+	LastUpdated int64  // unix seconds
+	Library     string // library root (contains steamapps/)
+	Tool        bool   // Proton, Steam Linux Runtime, redistributables
 }
 
 func (g Game) steamapps() string  { return filepath.Join(g.Library, "steamapps") }
@@ -168,13 +170,15 @@ func Installed(libs []string) []Game {
 				continue
 			}
 			size, _ := strconv.ParseInt(asStr(st["SizeOnDisk"]), 10, 64)
+			played, _ := strconv.ParseInt(asStr(st["LastPlayed"]), 10, 64)
+			updated, _ := strconv.ParseInt(asStr(st["LastUpdated"]), 10, 64)
 			name := asStr(st["name"])
 			if name == "" {
 				name = "App " + appid
 			}
 			games = append(games, Game{
 				AppID: appid, Name: name, InstallDir: asStr(st["installdir"]),
-				Size: size, Library: lib, Tool: isTool(appid, name),
+				Size: size, LastPlayed: played, LastUpdated: updated, Library: lib, Tool: isTool(appid, name),
 			})
 		}
 	}
@@ -217,4 +221,39 @@ func Uninstall(g Game, o UninstallOpts) error {
 		return err
 	}
 	return nil
+}
+
+// getFold is a case-insensitive map lookup; localconfig.vdf capitalisation varies between clients.
+func getFold(m map[string]any, key string) map[string]any {
+	for k, v := range m {
+		if strings.EqualFold(k, key) {
+			return asMap(v)
+		}
+	}
+	return nil
+}
+
+// ApplyLastPlayed raises each game's LastPlayed to the newest value found in any Steam user's
+// localconfig.vdf, which is more complete than the appmanifest field.
+func ApplyLastPlayed(root string, games []Game) {
+	files, _ := filepath.Glob(filepath.Join(root, "userdata", "*", "config", "localconfig.vdf"))
+	best := map[string]int64{}
+	for _, f := range files {
+		parsed, err := parseVDF(f)
+		if err != nil {
+			continue
+		}
+		apps := getFold(getFold(getFold(getFold(parsed, "UserLocalConfigStore"), "Software"), "Valve"), "Steam")
+		apps = getFold(apps, "apps")
+		for id, v := range apps {
+			if t, _ := strconv.ParseInt(asStr(asMap(v)["LastPlayed"]), 10, 64); t > best[id] {
+				best[id] = t
+			}
+		}
+	}
+	for i := range games {
+		if t := best[games[i].AppID]; t > games[i].LastPlayed {
+			games[i].LastPlayed = t
+		}
+	}
 }

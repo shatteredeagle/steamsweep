@@ -41,9 +41,10 @@ func main() {
 		os.Exit(1)
 	}
 	games := steam.Installed(steam.Libraries(r))
+	steam.ApplyLastPlayed(r, games)
 	if *list {
 		for _, g := range games {
-			fmt.Printf("%-10s %12d  %s\n", g.AppID, g.Size, g.Name)
+			fmt.Printf("%-10s %12d %11d  %s\n", g.AppID, g.Size, g.LastPlayed, g.Name)
 		}
 		return
 	}
